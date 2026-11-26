@@ -1,0 +1,24 @@
+{
+  "name": "opencode-flow",
+  "version": "0.1.0",
+  "description": "Pipeline discipline for OpenCode: injects a phase map, three gates and a compaction addendum into session requests.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "flow.md"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "workflow",
+    "flow"
+  ],
+  "dependencies": {
+    "@opencode/plugin": "^2.3.2"
+  }
+}
