@@ -72,9 +72,18 @@ El estado vive en el storage de la sesión, no en el transcript. El contrato act
 - `/flow off` — escapatoria; desactiva todo.
 - `/workflow …` — alias.
 
-El gate bloquea escritura (excepto sobre el propio artefacto) desde la fase 5 cuando hay feature declarada y
-falta `.scratch/<feature>/spec.md`; en la fase 6 exige tickets en `.scratch/<feature>/issues`. Las fases 7-10
-son declarativas: el gate se cierra a mano.
+El gate sólo intercepta herramientas de escritura (`write`, `edit`, `patch`, `multiedit`): leer, buscar y
+ejecutar comandos quedan fuera de su alcance. Bloquea cuando hay feature declarada y falta el artefacto:
+
+- fase 5 → exige `.scratch/<feature>/spec.md`
+- fase 6 → exige tickets `*.md` en `.scratch/<feature>/issues`
+- fase 1-4 y 7-10 → declarativas: el gate se cierra a mano
+
+`patch` es todo-o-nada: se permite únicamente si **todos** los archivos del `patchText` son el artefacto
+exigido. Si además toca código del proyecto, o si no se puede parsear, bloquea. Escribir el propio artefacto
+siempre está permitido.
+
+Si el runtime no expone hooks de herramientas, el gate se desarma y lo dice al arrancar: nunca rompe la sesión.
 
 La tabla de fases de arriba es la fuente de verdad en prosa; el plugin la refleja en `src/phases.ts`.
 Si cambiás una, cambiá la otra.

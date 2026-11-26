@@ -15,8 +15,13 @@ import {
   reminder,
   contextSummary,
 } from "./phases.ts"
+import { gateRequirement, verdictFor, writeTarget } from "./gate.ts"
 
 const LOG_PREFIX = "[opencode-flow]"
+
+// Only these can change project files. Everything else (read, grep, glob, bash…) is out of scope:
+// bash could write, but guessing from a command string would block far too much legitimate work.
+const WRITING_TOOLS = new Set(["write", "edit", "patch", "multiedit"])
 
 // Portable default: resolve `flow.md` next to this module, not an absolute home path.
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -269,6 +274,9 @@ export default Plugin.define({
 
     const registrations: Disposable[] = []
 
+    // Artefact paths resolve against the project, so the gate survives a different cwd.
+    const projectRoot = String(ctx.location?.project?.directory ?? ctx.location?.directory ?? process.cwd())
+
     const storage = ctx.storage as unknown as StorageLike | undefined
     if (!storage) {
       console.error(`${LOG_PREFIX} ctx.storage no disponible; el estado no persistirá entre requests`)
@@ -323,12 +331,10 @@ export default Plugin.define({
               await ctx.session.prompt({ sessionID: input.sessionID, text: reminder() })
               return
             }
+            const requirement = gateRequirement(previous.fase, previous.feature, projectRoot)
             await ctx.session.prompt({
               sessionID: input.sessionID,
-              text: [
-                contextSummary(previous),
-                `spec: ${previous.feature ? `.scratch/${previous.feature}/spec.md` : "n/d"}`,
-              ].join(" · "),
+              text: [contextSummary(previous), requirement ?? "gate: declarativo"].join(" · "),
             })
             return
           }
@@ -395,6 +401,32 @@ export default Plugin.define({
       }),
     )
 
+    // Sin spec no hay código. If the runtime has no tool hooks, say so and carry on unarmed
+    // rather than breaking the session.
+    const gateAvailable = Boolean(ctx.tool && typeof ctx.tool.hook === "function")
+    if (!gateAvailable) {
+      console.error(`${LOG_PREFIX} ctx.tool.hook no disponible: el gate de escritura queda desactivado`)
+    } else {
+      registrations.push(
+        await ctx.tool.hook("execute.before", async (event) => {
+          const sessionID = String((event as { sessionID?: unknown }).sessionID ?? "")
+          const state = sessionID ? await readState(sessionID) : undefined
+          if (!state || !state.active) return
+
+          const tool = String((event as { tool?: unknown }).tool ?? "")
+          // The hook fires for every tool. Only writing tools interest us; reading stays free.
+          if (!WRITING_TOOLS.has(tool.toLowerCase())) return
+          const target = writeTarget(tool, (event as { input?: unknown }).input, projectRoot)
+          const verdict = verdictFor(
+            { projectRoot, fase: state.fase, ...(state.feature ? { feature: state.feature } : {}) },
+            target,
+          )
+          if (verdict.allow) return
+          throw new Error(`GATE: ${verdict.reason}`)
+        }),
+      )
+    }
+
     // Bundled skills: registered in memory only; disk copies (user's or npx) win.
     const bundled = readBundledSkills(SKILLS_ROOT)
     if (bundled.length > 0 && ctx.skill && typeof ctx.skill.transform === "function") {
@@ -405,7 +437,7 @@ export default Plugin.define({
       )
     }
 
-    console.log(`${LOG_PREFIX} contrato cargado (${Buffer.byteLength(contract, "utf8")} bytes), ${bundled.length} skills empaquetadas, ${storage ? "storage disponible" : "storage NO disponible"}`)
+    console.log(`${LOG_PREFIX} contrato cargado (${Buffer.byteLength(contract, "utf8")} bytes), ${bundled.length} skills empaquetadas, ${storage ? "storage disponible" : "storage NO disponible"}, gate ${gateAvailable ? "armado" : "DESARMADO"}`)
     return async () => {
       await Promise.all(registrations.map((registration) => registration.dispose()))
     }
