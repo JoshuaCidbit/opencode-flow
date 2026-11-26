@@ -24,13 +24,20 @@ under `skills/` and are registered at setup with `ctx.skill.transform`.
 - The bundle is read when the plugin loads. If you edit a bundled skill, reload the plugin (restart or touch
   `src/index.ts`).
 
-Phase and gate are **rescued from the transcript** with a regex on the narrated line
-`[flow] fase N · gate pendiente: X`. If that line never appears, the addendum says
-`fase desconocida (revisar historial)` — it never invents state.
+## Trigger, estado y gate
+
+Phase and gate are persisted **per session** in `ctx.storage` (key `flow:<sessionID>`), so they survive
+compaction and are inherited by subagents through `parentID`. The transcript regex is only a fallback.
+
+- **Inactive means silent.** With `active !== true` the plugin injects nothing into `context`/`generate` —
+  no reminder, no contract. The flow is opt-in and stays invisible until you run `/flow`.
+- **Artifact auto-advance.** In phase 5 the existence of `.scratch/<feature>/spec.md` advances to 6 by
+  itself; in phase 6 any `*.md` inside `.scratch/<feature>/issues/` advances to 7. Phases 7-10 are
+  declarative and never auto-advance.
 
 ## What it does not do
 
-- It never writes to disk. There is no durable state: two terminals cannot contradict each other.
+- It never writes project files. Its only durable footprint is its own state in session storage.
 - It does not install skills to disk: bundled skills are registered in memory for the lifetime of the plugin.
 - It does not change behavior per agent (plan vs build). Plan mode restricts tools by itself; being in build is
   the edit permission.
@@ -72,3 +79,11 @@ and when fetched from git.
 ## Coexistence
 
 Runs alongside `opencode-compact-notes`. Both push to the same `event.system` array on compaction.
+
+## License
+
+The plugin code is **MIT © JoshuaCidbit** — see [`LICENSE`](./LICENSE).
+
+The 14 bundled skills under `skills/` are **MIT © 2026 Matt Pocock**, from
+[mattpocock/skills](https://github.com/mattpocock/skills). Their license is kept verbatim at
+[`skills/LICENSE`](./skills/LICENSE). They are redistributed unchanged, in memory only.
