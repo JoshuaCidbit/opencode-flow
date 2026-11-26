@@ -38,6 +38,52 @@ export function isState(value: unknown): value is FlowState {
 }
 
 /**
+ * Auto-avance PURO: decide si la fase siguiente ya está ganada por el artefacto en disco.
+ * No escribe, no toca storage: sólo calcula.
+ *
+ * - Monotónico: nunca reduce la fase.
+ * - Idempotente: aplicado dos veces devuelve undefined la segunda.
+ * - Sólo fases verificables por fichero (5, 6); 7-10 son declarativas y no se mueven solas.
+ *
+ * Devuelve undefined si no hay cambio (nada que escribir).
+ */
+export function advance(
+  state: FlowState,
+  isSatisfied: (fase: number, feature: string) => boolean,
+  lastPhase: number,
+): FlowState | undefined {
+  if (!state.active || !state.feature) return undefined
+  if (!isSatisfied(state.fase, state.feature)) return undefined
+  const next = state.fase >= lastPhase ? state.fase : state.fase + 1
+  // Monotonía: si el cálculo no sube, no hay nada que escribir.
+  if (next <= state.fase) return undefined
+  return {
+    ...state,
+    fase: next,
+    active: true,
+  }
+}
+
+/**
+ * Escribe el estado avanzado en el dueño sólo si hubo cambio.
+ * Devuelve { state, wrote } para que el llamador decida si anunciar el avance (C7).
+ */
+export async function commitAdvance(
+  storage: StorageLike,
+  ownerID: string,
+  before: FlowState,
+  after: FlowState | undefined,
+): Promise<{ state: FlowState; wrote: boolean }> {
+  if (!after) return { state: before, wrote: false }
+  try {
+    await storage.set(stateKey(ownerID), after)
+    return { state: after, wrote: true }
+  } catch {
+    // Falla abierta: sin persistir seguimos con el estado avanzado en memoria.
+    return { state: after, wrote: false }
+  }
+}
+/**
  * Busca el estado subiendo por la cadena de `parentID`.
  * Devuelve `{ state, ownerID }` para que el llamador escriba siempre en el dueño.
  * Devuelve undefined si ningún ancestro tiene estado.

@@ -17,13 +17,32 @@ import {
 } from "./phases.ts"
 import { satisfied, gateRequirement, verdictFor, writeTarget } from "./gate.ts"
 import {
+  advance,
+  commitAdvance,
   resolveState,
   stateKey,
   type FlowState,
   type StorageLike,
 } from "./state.ts"
+import { makeLogger, OnceLog } from "./log.ts"
+import { decide } from "./gate-decision.ts"
 
 const LOG_PREFIX = "[opencode-flow]"
+
+// Fallos de arranque que ocurren ANTES de que exista el logger del runtime (p. ej. leer
+// el contrato). Se registran una vez por proceso. Regla 1 de silencio: una vez, nunca por turno.
+const startupLog = new OnceLog({
+  error: (message, extra) => (extra !== undefined ? console.error(message, extra) : console.error(message)),
+})
+
+// `push()` es una función libre, así que necesita su propio guardia de "una vez".
+const pushLog = new OnceLog({
+  error: (message) => console.error(message),
+})
+
+// Memoria de proceso del último error interno del gate (regla 4). /flow status lo muestra.
+let lastGateError: string | undefined
+
 
 // Only these can change project files. Everything else (read, grep, glob, bash…) is out of scope:
 // bash could write, but guessing from a command string would block far too much legitimate work.
@@ -143,12 +162,12 @@ async function loadContract(options: Record<string, unknown>): Promise<string | 
   try {
     const text = await readFile(source, "utf8")
     if (!text.trim()) {
-      console.error(`${LOG_PREFIX} contrato vacío: ${source}`)
+      startupLog.once("contract-empty", `${LOG_PREFIX} contrato vacío: ${source}`)
       return undefined
     }
     return text
   } catch (error) {
-    console.error(`${LOG_PREFIX} no pude leer el contrato en ${source}:`, error)
+    startupLog.once("contract-unreadable", `${LOG_PREFIX} no pude leer el contrato en ${source}: ${String(error)}`)
     return undefined
   }
 }
@@ -198,7 +217,8 @@ function addendum(messages: unknown): string {
 function push(event: { system?: unknown }, text: string, kind: string): void {
   // Defensive: if the event shape ever changes, never break the native request.
   if (!Array.isArray(event.system)) {
-    console.error(`${LOG_PREFIX} forma inesperada en ${kind} (system no es array); omito`)
+    // Silencio total en lo conversacional: esto va a log, nunca al chat ni al contexto.
+    pushLog.once(`push-shape:${kind}`, `${LOG_PREFIX} forma inesperada en ${kind} (system no es array); omito`)
     return
   }
   event.system.push({ type: "text", text })
@@ -232,9 +252,12 @@ export default Plugin.define({
     // Artefact paths resolve against the project, so the gate survives a different cwd.
     const projectRoot = String(ctx.location?.project?.directory ?? ctx.location?.directory ?? process.cwd())
 
+    // A0: logger del runtime si existe; si no, consola. Todo fallo se registra una vez.
+    const log = new OnceLog(makeLogger(ctx))
+
     const storage = ctx.storage as unknown as StorageLike | undefined
     if (!storage) {
-      console.error(`${LOG_PREFIX} ctx.storage no disponible; el estado no persistirá entre requests`)
+      log.once("no-storage", "ctx.storage no disponible; el estado no persistirá entre requests")
     }
 
     const writeState = async (sessionID: string, state: FlowState): Promise<void> => {
@@ -242,47 +265,38 @@ export default Plugin.define({
       await storage.set(stateKey(sessionID), state)
     }
 
-    // Auto-advance: the artifact already on disk IS the user's act, so asking them to type
-    // `/flow gate spec` is ceremony. Only file-verifiable phases (5, 6) move; 7-10 stay put.
-    const advance = (state: FlowState): FlowState | undefined => {
-      if (!state.active || !state.feature) return undefined
-      if (!satisfied(state.fase, state.feature, projectRoot)) return undefined
-      const next = state.fase >= LAST_PHASE ? state.fase : state.fase + 1
-      if (next === state.fase) return undefined
-      const entry = phase(next)
-      return {
-        fase: next,
-        ...(entry?.gate ? { gate: entry.gate } : {}),
-        ...(state.feature ? { feature: state.feature } : {}),
-        active: true,
+    // A5: `readState` es PURO. Resuelve { state, ownerID } sin escribir ni tocar disco
+    // más allá de leer storage. El auto-avance lo invoca el llamador, explícito.
+    const readState = async (sessionID: string): Promise<{ state: FlowState; ownerID: string } | undefined> => {
+      if (!storage) return undefined
+      try {
+        return await resolveState(
+          storage,
+          async (id) => {
+            try {
+              const info = (await ctx.session.get({ sessionID: id })) as { parentID?: string | null } | undefined
+              return info ?? undefined
+            } catch {
+              return undefined
+            }
+          },
+          sessionID,
+        )
+      } catch (error) {
+        // A4: try/catch en la LECTURA de estado. Nunca rompe la petición nativa.
+        log.once("readState", `readState falló: ${String(error)}`)
+        return undefined
       }
     }
 
-    // A3: `readState` resuelve estado Y dueño. Las escrituras van al dueño (ownerID),
-    // nunca al hijo, para que un subagente no pueda avanzar fases al margen del padre.
-    const readState = async (sessionID: string): Promise<{ state: FlowState; ownerID: string } | undefined> => {
-      if (!storage) return undefined
-      const base = await resolveState(
-        storage,
-        async (id) => {
-          try {
-            const info = (await ctx.session.get({ sessionID: id })) as { parentID?: string | null } | undefined
-            return info ?? undefined
-          } catch {
-            return undefined
-          }
-        },
-        sessionID,
-      )
-      if (!base) return undefined
-      const moved = advance(base.state)
-      if (!moved) return base
-      try {
-        await writeState(base.ownerID, moved)
-      } catch {
-        return base
-      }
-      return { state: moved, ownerID: base.ownerID }
+    // A5: avance explícito. El llamador decide cuándo; sólo escribe si hubo cambio.
+    const advanceState = async (
+      resolved: { state: FlowState; ownerID: string } | undefined,
+    ): Promise<{ state: FlowState; ownerID: string; wrote: boolean } | undefined> => {
+      if (!resolved || !storage) return resolved ? { ...resolved, wrote: false } : undefined
+      const next = advance(resolved.state, (fase, feature) => satisfied(fase, feature, projectRoot), LAST_PHASE)
+      const committed = await commitAdvance(storage, resolved.ownerID, resolved.state, next)
+      return { state: committed.state, ownerID: resolved.ownerID, wrote: committed.wrote }
     }
 
     // `/flow` is a user act, not a model decision. Same logic for both names: there is no alias field.
@@ -296,10 +310,12 @@ export default Plugin.define({
               ? (root as { text: string }).text
               : ""
         const parsed = parseCommand(text ?? "")
+        // A5: lectura pura -> avance explícito. La fase ya viene actualizada.
         const resolved = await readState(input.sessionID)
+        const moved = await advanceState(resolved)
         // A3: escrituras al dueño; el hijo nunca es dueño del estado.
-        const owner = resolved?.ownerID ?? input.sessionID
-        const previous = resolved?.state
+        const owner = moved?.ownerID ?? input.sessionID
+        const previous = moved?.state
 
         switch (parsed.kind) {
           case "help":
@@ -323,7 +339,11 @@ export default Plugin.define({
             const requirement = gateRequirement(previous.fase, previous.feature, projectRoot)
             await ctx.session.prompt({
               sessionID: input.sessionID,
-              text: [contextSummary(previous), requirement ?? "gate: declarativo"].join(" · "),
+              text: [
+                contextSummary(previous),
+                requirement ?? "gate: declarativo",
+                ...(lastGateError ? [`AVISO: ${lastGateError}`] : []),
+              ].join(" · "),
             })
             return
           }
@@ -354,7 +374,15 @@ export default Plugin.define({
               ...(parsed.feature ?? previous?.feature ? { feature: parsed.feature ?? previous?.feature } : {}),
               active: true,
             })
-            await ctx.session.prompt({ sessionID: input.sessionID, text: phaseBrief(parsed.fase, parsed.feature ?? previous?.feature) })
+            await ctx.session.prompt({
+              sessionID: input.sessionID,
+              // Regla 3: es el ÚNICO fallo que se comunica al usuario, y sólo tras su
+              // acto explícito (/flow start). Si el runtime no permite el hook, el flow
+              // sólo guía: no debe fingir que bloquea.
+              text: gateAvailable
+                ? phaseBrief(parsed.fase, parsed.feature ?? previous?.feature)
+                : `${phaseBrief(parsed.fase, parsed.feature ?? previous?.feature)}\n\nAVISO: gate de escritura no disponible en este runtime: el flow solo guía, no bloquea.`,
+            })
             return
           }
         }
@@ -376,7 +404,8 @@ export default Plugin.define({
         await ctx.session.hook(kind, async (event) => {
           const sessionID = String((event as { sessionID?: unknown }).sessionID ?? "")
           const resolved = sessionID ? await readState(sessionID) : undefined
-          const state = resolved?.state
+          const moved = await advanceState(resolved)
+          const state = moved?.state
           if (!state || !state.active) return
           push(event, phaseBrief(state.fase, state.feature), kind)
         }),
@@ -388,7 +417,8 @@ export default Plugin.define({
       await ctx.session.hook("compaction", async (event) => {
         const sessionID = String((event as { sessionID?: unknown }).sessionID ?? "")
         const resolved = sessionID ? await readState(sessionID) : undefined
-        push(event, flowAddendum(resolved?.state, event.messages), "compaction")
+        const moved = await advanceState(resolved)
+        push(event, flowAddendum(moved?.state, event.messages), "compaction")
       }),
     )
 
@@ -396,18 +426,44 @@ export default Plugin.define({
     // rather than breaking the session.
     const gateAvailable = Boolean(ctx.tool && typeof ctx.tool.hook === "function")
     if (!gateAvailable) {
-      console.error(`${LOG_PREFIX} ctx.tool.hook no disponible: el gate de escritura queda desactivado`)
+      log.once("no-tool-hook", "ctx.tool.hook no disponible: el gate de escritura queda desactivado")
     } else {
       registrations.push(
         await ctx.tool.hook("execute.before", async (event) => {
-          const sessionID = String((event as { sessionID?: unknown }).sessionID ?? "")
-          const resolved = sessionID ? await readState(sessionID) : undefined
-          const state = resolved?.state
-          if (!state || !state.active) return
-
           const tool = String((event as { tool?: unknown }).tool ?? "")
-          // The hook fires for every tool. Only writing tools interest us; reading stays free.
-          if (!WRITING_TOOLS.has(tool.toLowerCase())) return
+          const sessionID = String((event as { sessionID?: unknown }).sessionID ?? "")
+
+          // A5 + regla 4: la decisión se resuelve en orden (filtro -> estado -> falla abierta).
+          // Lectura: no toca storage ni disco.
+          let resolved: { state: FlowState; ownerID: string } | undefined
+          let internalError: unknown
+          if (WRITING_TOOLS.has(tool.toLowerCase())) {
+            try {
+              const base = sessionID ? await readState(sessionID) : undefined
+              resolved = await advanceState(base)
+            } catch (error) {
+              internalError = error
+            }
+          }
+
+          const decision = decide({
+            tool,
+            ...(resolved?.state ? { state: resolved.state } : {}),
+            ...(internalError !== undefined ? { internalError } : {}),
+          })
+
+          if (decision.kind === "free" || decision.kind === "allow") return
+
+          if (decision.kind === "fail-open") {
+            // Regla 4: permitir la escritura, registrar una vez y guardar para /flow status.
+            lastGateError = `error interno en el gate: ${decision.error}`
+            log.once("gate-internal", lastGateError)
+            return
+          }
+
+          // Con estado resuelto, el veredicto fino lo da el gate de fases (artefactos reales).
+          const state = resolved?.state
+          if (!state) return
           const target = writeTarget(tool, (event as { input?: unknown }).input, projectRoot)
           const verdict = verdictFor(
             { projectRoot, fase: state.fase, ...(state.feature ? { feature: state.feature } : {}) },
@@ -429,7 +485,11 @@ export default Plugin.define({
       )
     }
 
-    console.log(`${LOG_PREFIX} contrato cargado (${Buffer.byteLength(contract, "utf8")} bytes), ${bundled.length} skills empaquetadas, ${storage ? "storage disponible" : "storage NO disponible"}, gate ${gateAvailable ? "armado" : "DESARMADO"}`)
+    // Éxito de arranque: nivel debug, nunca una línea visible (regla 2).
+    log.debug(
+      "startup",
+      `contrato cargado (${Buffer.byteLength(contract, "utf8")} bytes), ${bundled.length} skills empaquetadas, ${storage ? "storage disponible" : "storage NO disponible"}, gate ${gateAvailable ? "armado" : "DESARMADO"}`,
+    )
     return async () => {
       await Promise.all(registrations.map((registration) => registration.dispose()))
     }
