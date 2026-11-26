@@ -15,7 +15,7 @@ import {
   reminder,
   contextSummary,
 } from "./phases.ts"
-import { gateRequirement, verdictFor, writeTarget } from "./gate.ts"
+import { satisfied, gateRequirement, verdictFor, writeTarget } from "./gate.ts"
 
 const LOG_PREFIX = "[opencode-flow]"
 
@@ -232,11 +232,11 @@ function addendum(messages: unknown): string {
   const { phase, gate } = lastState(messages)
   return [
     "# Estado del flow (compactación)",
-    "Además del contrato de compactación, preservá estos tres campos en el resumen:",
+    "Además del contrato de compactación, preserva estos tres campos en el resumen:",
     `- Fase actual del mapa: ${phase}`,
     `- Gate pendiente: ${gate}`,
-    '- Permiso de edición: si consta que el usuario habilitó editar código, decilo; si no consta, escribí "no consta".',
-    "Si la fase figura como desconocida, no la infieras del contenido: decila tal cual.",
+    '- Permiso de edición: si consta que el usuario habilitó editar código, dilo; si no consta, escribe "no consta".',
+    "Si la fase figura como desconocida, no la infieras del contenido: dila tal cual.",
   ].join("\n")
 }
 
@@ -256,7 +256,7 @@ function flowAddendum(state: FlowState | undefined, messages: unknown): string {
   if (state) {
     return [
       "# Estado del flow (compactación)",
-      "Además del contrato de compactación, preservá estos campos en el resumen:",
+      "Además del contrato de compactación, preserva estos campos en el resumen:",
       `- Fase actual del mapa: fase ${state.fase}`,
       `- Gate pendiente: ${state.gate ?? "checkpoint aprobado por el usuario"}`,
       `- Feature: ${state.feature ?? "no declarada"}`,
@@ -282,21 +282,50 @@ export default Plugin.define({
       console.error(`${LOG_PREFIX} ctx.storage no disponible; el estado no persistirá entre requests`)
     }
 
-    const readState = async (sessionID: string): Promise<FlowState | undefined> => {
-      if (!storage) return undefined
-      return resolveState(storage, async (id) => {
-        try {
-          const info = (await ctx.session.get({ sessionID: id })) as { parentID?: string | null } | undefined
-          return info ?? undefined
-        } catch {
-          return undefined
-        }
-      }, sessionID)
-    }
-
     const writeState = async (sessionID: string, state: FlowState): Promise<void> => {
       if (!storage) return
       await storage.set(stateKey(sessionID), state)
+    }
+
+    // Auto-advance: the artifact already on disk IS the user's act, so asking them to type
+    // `/flow gate spec` is ceremony. Only file-verifiable phases (5, 6) move; 7-10 stay put.
+    const advance = (state: FlowState): FlowState | undefined => {
+      if (!state.active || !state.feature) return undefined
+      if (!satisfied(state.fase, state.feature, projectRoot)) return undefined
+      const next = state.fase >= LAST_PHASE ? state.fase : state.fase + 1
+      if (next === state.fase) return undefined
+      const entry = phase(next)
+      return {
+        fase: next,
+        ...(entry?.gate ? { gate: entry.gate } : {}),
+        ...(state.feature ? { feature: state.feature } : {}),
+        active: true,
+      }
+    }
+
+    const readState = async (sessionID: string): Promise<FlowState | undefined> => {
+      if (!storage) return undefined
+      const base = await resolveState(
+        storage,
+        async (id) => {
+          try {
+            const info = (await ctx.session.get({ sessionID: id })) as { parentID?: string | null } | undefined
+            return info ?? undefined
+          } catch {
+            return undefined
+          }
+        },
+        sessionID,
+      )
+      if (!base) return undefined
+      const moved = advance(base)
+      if (!moved) return base
+      try {
+        await writeState(sessionID, moved)
+      } catch {
+        return base
+      }
+      return moved
     }
 
     // `/flow` is a user act, not a model decision. Same logic for both names: there is no alias field.
@@ -323,7 +352,7 @@ export default Plugin.define({
             await writeState(input.sessionID, { fase: previous?.fase ?? 1, ...(previous?.gate ? { gate: previous.gate } : {}), ...(previous?.feature ? { feature: previous.feature } : {}), active: false })
             await ctx.session.prompt({
               sessionID: input.sessionID,
-              text: `${narration(previous?.fase ?? 1, "flow desactivado")}\nFlow desactivado para esta sesión. Reactivá con /flow start [N] [slug].`,
+              text: `${narration(previous?.fase ?? 1, "flow desactivado")}\nFlow desactivado para esta sesión. Reactiva con /flow start [N] [slug].`,
             })
             return
           case "status": {
@@ -379,15 +408,16 @@ export default Plugin.define({
       )
     }
 
-    // Active: short state. Inactive: a one-line reminder. The contract stays on disk as reference.
+    // Active: the rules of the phase, once per turn — the narration instruction inside them must
+    // survive compaction, which `ctx.session.prompt` history does not.
+    // Inactive: total silence. Not even a reminder: the flow is opt-in and stays invisible.
     for (const kind of ["context", "generate"] as const) {
       registrations.push(
         await ctx.session.hook(kind, async (event) => {
           const sessionID = String((event as { sessionID?: unknown }).sessionID ?? "")
           const state = sessionID ? await readState(sessionID) : undefined
-          // Inactive: one line. Active: the phase rules once per turn — the narration instruction
-          // inside them must survive compaction, which `ctx.session.prompt` history does not.
-          push(event, state && state.active ? phaseBrief(state.fase, state.feature) : reminder(), kind)
+          if (!state || !state.active) return
+          push(event, phaseBrief(state.fase, state.feature), kind)
         }),
       )
     }

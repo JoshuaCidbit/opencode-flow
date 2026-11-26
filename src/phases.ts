@@ -98,7 +98,7 @@ export type Parsed =
   | { kind: "bad-gate"; name: string }
   | { kind: "off" }
 
-const NARRATION_HELP = "Repetí la primera línea de arriba en cada transición de fase y antes de afirmar avance."
+const NARRATION_HELP = "Repite la primera línea de arriba en cada transición de fase y antes de afirmar avance."
 
 function toPhase(raw: string): PhaseNumber | undefined {
   if (!/^\d+$/.test(raw)) return undefined
@@ -182,11 +182,19 @@ export function phaseBrief(fase: number, feature?: string): string {
     `Skill a cargar: ${entry.skill}`,
     `Cierra con: ${entry.closes}`,
   ]
-  if (entry.n === 4) lines.push("Escribí sólo en /tmp/opencode-proto-<slug>; es desechable, no se commitea.")
+  if (entry.n === 4) lines.push("Escribe sólo en /tmp/opencode-proto-<slug>; es desechable, no se commitea.")
+  if (entry.n === 5) {
+    lines.push(
+      "No exijas las fases 1-4 para arrancar aquí: si la conversación ya trae el problema, sintetízalo ahora mismo.",
+      `Escribe el spec ya en ${scratch}spec.md con lo que hayas entendido (problema, alcance, fuera de alcance, criterios de aceptación).`,
+      "No te bloquees esperando datos que falten: escribe con lo que hay y marca los supuestos.",
+      "Sigue en loop con el usuario hasta que apruebe; el gate se abre solo cuando el archivo exista.",
+    )
+  }
   if (feature) lines.push(`Feature declarada: ${feature} (raíz de artefactos: ${scratch})`)
   else if (entry.blocks) lines.push("Feature: no declarada. El gate queda inactivo hasta `/flow start N <slug>`.")
   if (entry.gate) {
-    lines.push(`Gate de esta fase: ${entry.gate} — cerralo con /flow gate ${entry.gate}.`)
+    lines.push(`Gate de esta fase: ${entry.gate} — ciérralo con /flow gate ${entry.gate}.`)
     if (entry.blocks) lines.push(`Sin el artefacto, toda escritura fuera de él está bloqueada. Escapatoria: /flow off.`)
   }
   lines.push("", NARRATION_HELP)
@@ -195,7 +203,7 @@ export function phaseBrief(fase: number, feature?: string): string {
 
 /** One line for an inactive flow: a reminder, never the whole contract. */
 export function reminder(): string {
-  return "flow inactivo · escribí /flow start [N] [slug] para activarlo (arranca en fase 1 sin argumentos)"
+  return "flow inactivo · escribe /flow start [N] [slug] para activarlo (arranca en fase 1 sin argumentos)"
 }
 
 /** Short state pushed into `context`/`generate` when the flow is active. */

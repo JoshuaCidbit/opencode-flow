@@ -1,6 +1,6 @@
 # FLOW — contrato de trabajo
 
-Reglas no negociables, activas en cada petición. Si una petición del usuario las contradice, decilo antes de continuar.
+Reglas no negociables, activas en cada petición. Si una petición del usuario las contradice, dilo antes de continuar.
 
 ## Mapa de fases (orden prescriptivo)
 
@@ -28,7 +28,7 @@ Saltar una fase exige decir qué riesgo se asume y obtener aceptación explícit
 
 ## Checkpoint (entregable de Plan)
 
-Antes de editar código, entregá exactamente:
+Antes de editar código, entrega exactamente:
 - **Entendí**: qué se pide, con citas `path:line`.
 - **Asumo**: lo no dicho que estoy completando.
 - **Necesito que confirmes**: preguntas abiertas reales.
@@ -37,28 +37,28 @@ Pasar a build es la aprobación. No repitas el checkpoint después.
 
 ## Narración obligatoria
 
-En cada transición de fase y antes de cualquier afirmación de avance o de terminado, escribí una línea:
+En cada transición de fase y antes de cualquier afirmación de avance o de terminado, escribe una línea:
 `[flow] fase N · gate pendiente: X`
 
 Sin esa línea el estado no sobrevive a la compactación.
 
 ## Verificación (escalera)
 
-1. Detectá el manifest (`package.json`, `requirements.txt`, etc.) del directorio que vas a tocar.
-2. Localizá el script real en ese manifest; no inventes comandos.
-3. Corré desde el directorio correcto (la raíz de un monorepo puede no tener manifest).
-4. Leé la salida completa, incluido el código de salida.
-5. Sólo entonces afirmá. Si falló, pegá el error real.
+1. Detecta el manifest (`package.json`, `requirements.txt`, etc.) del directorio que vas a tocar.
+2. Localiza el script real en ese manifest; no inventes comandos.
+3. Ejecuta desde el directorio correcto (la raíz de un monorepo puede no tener manifest).
+4. Lee la salida completa, incluido el código de salida.
+5. Sólo entonces afirma. Si falló, pega el error real.
 
 Si el manifest no declara suite: dilo en vez de inventar un comando, y verifica con lo que sí se pueda ejecutar.
 
 ## Prototipos (fase 4)
 
-Escribí sólo en `/tmp/opencode-proto-<slug>`. Nunca dentro del árbol del proyecto. Es desechable: no se commitea.
+Escribe sólo en `/tmp/opencode-proto-<slug>`. Nunca dentro del árbol del proyecto. Es desechable: no se commitea.
 
 ## Escaladas
 
-- `handoff`: cuando el problema excede el modelo actual; llevá evidencia (comandos, salidas, archivos).
+- `handoff`: cuando el problema excede el modelo actual; lleva evidencia (comandos, salidas, archivos).
 - `research`: en segundo plano cuando falta un dato externo verificable.
 - `wait-what`: cuando la premisa o el pedido no cierra; parar y preguntar.
 
@@ -71,6 +71,17 @@ El estado vive en el storage de la sesión, no en el transcript. El contrato act
 - `/flow gate <spec|tickets|evidence|review|integration|retro>` — cierra el gate y avanza de fase.
 - `/flow off` — escapatoria; desactiva todo.
 - `/workflow …` — alias.
+
+Tres reglas de uso:
+
+1. **Silencio mientras está inactivo.** Con el flow apagado el plugin no inyecta nada: ni recordatorio ni
+   contrato. Es opt-in y se mantiene invisible hasta que el usuario escribe `/flow`.
+2. **Arrancar en fase 5 no exige las fases 1-4.** `/flow start 5 <slug>` instruye a sintetizar lo que ya
+   haya en la conversación y escribir `.scratch/<slug>/spec.md` de una, marcando los supuestos.
+   `.scratch/` se resuelve contra la raíz del proyecto (`ctx.location.project.directory`).
+3. **Auto-avance por artefacto.** Si el flow está activo en fase 5 y ya existe `.scratch/<feature>/spec.md`,
+   o en fase 6 y ya hay algún `*.md` en `.scratch/<feature>/issues/`, la fase avanza sola: no hace falta
+   `/flow gate spec|tickets`. Las fases 7-10 son declarativas y no auto-avanzan.
 
 El gate sólo intercepta herramientas de escritura (`write`, `edit`, `patch`, `multiedit`): leer, buscar y
 ejecutar comandos quedan fuera de su alcance. Bloquea cuando hay feature declarada y falta el artefacto:
@@ -86,4 +97,4 @@ siempre está permitido.
 Si el runtime no expone hooks de herramientas, el gate se desarma y lo dice al arrancar: nunca rompe la sesión.
 
 La tabla de fases de arriba es la fuente de verdad en prosa; el plugin la refleja en `src/phases.ts`.
-Si cambiás una, cambiá la otra.
+Si cambias una, cambia la otra.

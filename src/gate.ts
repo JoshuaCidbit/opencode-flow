@@ -103,7 +103,7 @@ export function verdictFor(options: GateOptions, target: WriteTarget): GateVerdi
 
   return {
     allow: false,
-    reason: `fase ${entry.n} (${entry.name}) exige ${relatives.join(" | ")}; falta. Escribilo, o /flow gate ${entry.gate}, o /flow off`,
+    reason: `fase ${entry.n} (${entry.name}) exige ${relatives.join(" | ")}; falta. Escríbelo, o /flow gate ${entry.gate}, o /flow off`,
   }
 }
 
@@ -153,6 +153,20 @@ export function writeTarget(tool: string, input: unknown, base: string): WriteTa
   const paths = readPathFields(record)
   if (paths.length > 0) return { kind: "file", file: resolveAgainst(base, paths[0]), tool }
   return { kind: "unknown", tool }
+}
+
+/**
+ * True when the artifact that closes `fase` already exists on disk.
+ * Used by the auto-advance: seeing the artifact is the user's act; no manual gate needed.
+ */
+export function satisfied(fase: number, feature: string | undefined, root: string): boolean {
+  const entry = phase(fase)
+  if (!feature || !blocking(entry)) return false
+  const relatives = artifactPaths(feature, entry)
+  if (!relatives) return false
+  return relatives
+    .map((name) => resolveAgainst(root, name))
+    .some((absolute) => satisfies(entry, absolute, feature))
 }
 
 /** Explain the gate of the current phase, for `/flow status` and the start brief. */
