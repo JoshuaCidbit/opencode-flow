@@ -16,8 +16,8 @@ export type GateInput = {
 
 export type GateDecision =
   | { kind: "free" } // herramienta de lectura: ni se consulta el estado
-  | { kind: "allow" } // escritura permitida
-  | { kind: "block"; reason: string }
+  | { kind: "allow" } // escritura permitida (sin flow activo que aplicar)
+  | { kind: "evaluate" } // escritura con flow activo: lo decide verdictFor (gate.ts)
   | { kind: "fail-open"; error: string } // regla 4: error interno -> permitir y avisar
 
 /**
@@ -36,9 +36,9 @@ export function decide(input: GateInput): GateDecision {
   // 3. Sin estado (o inactivo): no hay gate que aplicar.
   if (!input.state || !input.state.active) return { kind: "allow" }
 
-  // 4. Con estado activo, la fase decide. Las fases 1-4 no cierran escritura.
-  if (input.state.fase >= 5) {
-    return { kind: "block", reason: `fase ${input.state.fase}: escritura cerrada sin gate aprobado` }
-  }
-  return { kind: "allow" }
+  // 4. Criba barata terminada: TODO lo que queda es política de fases y de rutas, y eso
+  // vive en verdictFor (gate.ts), no aquí. Devolvemos `evaluate` para que el llamador
+  // consulte el gate real. Hoy esto equivale a "no bloquees aún"; en 4e el bloqueo por
+  // ruta (.scratch/ en fases 1-6) lo decide verdictFor.
+  return { kind: "evaluate" }
 }

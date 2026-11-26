@@ -25,7 +25,7 @@ import {
   type StorageLike,
 } from "./state.ts"
 import { makeLogger, OnceLog } from "./log.ts"
-import { decide } from "./gate-decision.ts"
+import { decide, WRITING_TOOLS } from "./gate-decision.ts"
 
 const LOG_PREFIX = "[opencode-flow]"
 
@@ -44,9 +44,12 @@ const pushLog = new OnceLog({
 let lastGateError: string | undefined
 
 
-// Only these can change project files. Everything else (read, grep, glob, bash…) is out of scope:
-// bash could write, but guessing from a command string would block far too much legitimate work.
-const WRITING_TOOLS = new Set(["write", "edit", "patch", "multiedit"])
+// El conjunto único de herramientas de escritura vive en gate-decision.ts. Antes había una
+// copia aquí sin `apply_patch`: dos listas distintas son un agujero (lo que una filtra, la
+// otra lo cuela).
+//
+// Importante: `bash` NO está, aunque pueda escribir. Adivinar desde una cadena de comando
+// bloquearía demasiado trabajo legítimo; el gate es una barrera de guía, no de seguridad.
 
 // Portable default: resolve `flow.md` next to this module, not an absolute home path.
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -202,15 +205,32 @@ function lastState(messages: unknown): { phase: string; gate: string } {
   return { phase, gate }
 }
 
-function addendum(messages: unknown): string {
+// Estado para compactación: PRIMERO el estado persistido, y sólo si no hay, la última
+// narración del historial. Nunca inventa una fase: si no consta, lo dice.
+//
+// Antes había dos funciones (`addendum` y `flowAddendum`) con textos casi idénticos que
+// podían divergir; ahora hay una sola, con la caída dentro.
+function flowAddendum(state: FlowState | undefined, messages: unknown): string {
+  if (state) {
+    return [
+      "# Estado del flow (compactación)",
+      "Además del contrato de compactación, preserva estos campos en el resumen:",
+      `- Fase actual del mapa: fase ${state.fase}`,
+      `- Gate pendiente: ${state.gate ?? "checkpoint aprobado por el usuario"}`,
+      `- Feature: ${state.feature ?? "no declarada"}`,
+      `- Flow activo: ${state.active ? "sí" : "no"}`,
+    ].join("\n")
+  }
+
   const { phase, gate } = lastState(messages)
   return [
     "# Estado del flow (compactación)",
-    "Además del contrato de compactación, preserva estos tres campos en el resumen:",
+    "Además del contrato de compactación, preserva estos campos en el resumen:",
     `- Fase actual del mapa: ${phase}`,
     `- Gate pendiente: ${gate}`,
     '- Permiso de edición: si consta que el usuario habilitó editar código, dilo; si no consta, escribe "no consta".',
-    "Si la fase figura como desconocida, no la infieras del contenido: dila tal cual.",
+    "No hay estado persistido: estos valores salen de la última narración, no los infieras del contenido.",
+    "Si la fase figura como desconocida, no la inventes: dila tal cual.",
   ].join("\n")
 }
 
@@ -224,22 +244,7 @@ function push(event: { system?: unknown }, text: string, kind: string): void {
   event.system.push({ type: "text", text })
 }
 
-export { addendum, flowAddendum, lastState }
-
-// Storage first, narration line as fallback. It never invents a phase.
-function flowAddendum(state: FlowState | undefined, messages: unknown): string {
-  if (state) {
-    return [
-      "# Estado del flow (compactación)",
-      "Además del contrato de compactación, preserva estos campos en el resumen:",
-      `- Fase actual del mapa: fase ${state.fase}`,
-      `- Gate pendiente: ${state.gate ?? "checkpoint aprobado por el usuario"}`,
-      `- Feature: ${state.feature ?? "no declarada"}`,
-      `- Flow activo: ${state.active ? "sí" : "no"}`,
-    ].join("\n")
-  }
-  return addendum(messages)
-}
+export { flowAddendum, lastState }
 
 export default Plugin.define({
   id: "opencode-flow",
@@ -461,7 +466,7 @@ export default Plugin.define({
             return
           }
 
-          // Con estado resuelto, el veredicto fino lo da el gate de fases (artefactos reales).
+          // `evaluate`: toda la política de fases y de rutas vive en gate.ts.
           const state = resolved?.state
           if (!state) return
           const target = writeTarget(tool, (event as { input?: unknown }).input, projectRoot)

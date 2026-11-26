@@ -36,24 +36,35 @@ test("regla 4: la falla abierta NUNCA bloquea", () => {
   assert.equal(decision.kind, "fail-open")
 })
 
+// A5: apply_patch también escribe; si falta en el conjunto, se cuela una escritura.
+test("A5: apply_patch está en WRITING_TOOLS", () => {
+  assert.ok(WRITING_TOOLS.has("apply_patch"))
+  assert.ok(WRITING_TOOLS.has("multiedit"))
+})
+
 test("escritura sin flow activo: permitida", () => {
   assert.equal(decide({ tool: "write", state: { fase: 1, active: false } }).kind, "allow")
   assert.equal(decide({ tool: "write" }).kind, "allow")
 })
 
-test("escritura en fase cerrada (5+): bloqueada con motivo", () => {
-  const decision = decide({ tool: "write", state: { fase: 5, active: true } })
-  assert.equal(decision.kind, "block")
-  assert.match((decision as { reason: string }).reason, /fase 5/)
-})
-
-test("escritura en fases 1-4: permitida", () => {
+// Comportamiento ACTUAL de las fases 1-4 con escritura (se invierte en 4e):
+// hoy devuelven `evaluate`, es decir "consulta el gate, el gate dirá". Todavía NO
+// bloquean por sí mismas. La decisión B exige que las escrituras fuera de .scratch/
+// sí se bloqueen en las fases 1-6; eso se implementa en 4e y este test cambiará.
+test("4e-pendiente: escritura en fases 1-4 NO se bloquea en la criba (comportamiento actual)", () => {
   for (const fase of [1, 2, 3, 4]) {
-    assert.equal(decide({ tool: "write", state: { fase, active: true } }).kind, "allow")
+    const decision = decide({ tool: "write", state: { fase, active: true } })
+    assert.notEqual(decision.kind, "free", "no es lectura: sí consulta el estado")
+    assert.equal(decision.kind, "evaluate", `fase ${fase}: delega en verdictFor`)
   }
 })
 
+test("4e-pendiente: escritura en fase 5+ tampoco bloquea la criba; bloquea verdictFor", () => {
+  const decision = decide({ tool: "write", state: { fase: 9, active: true } })
+  assert.equal(decision.kind, "evaluate")
+})
+
 test("A5: el nombre de herramienta es insensible a mayúsculas", () => {
-  assert.equal(decide({ tool: "WRITE", state: { fase: 5, active: true } }).kind, "block")
+  assert.equal(decide({ tool: "WRITE", state: { fase: 5, active: true } }).kind, "evaluate")
   assert.equal(decide({ tool: "READ" }).kind, "free")
 })
