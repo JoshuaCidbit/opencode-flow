@@ -61,3 +61,20 @@ Escribí sólo en `/tmp/opencode-proto-<slug>`. Nunca dentro del árbol del proy
 - `handoff`: cuando el problema excede el modelo actual; llevá evidencia (comandos, salidas, archivos).
 - `research`: en segundo plano cuando falta un dato externo verificable.
 - `wait-what`: cuando la premisa o el pedido no cierra; parar y preguntar.
+
+## Trigger y gate (plugin `opencode-flow`)
+
+El estado vive en el storage de la sesión, no en el transcript. El contrato activa es este archivo en disco.
+
+- `/flow start [N] [slug]` — activa el flow y declara la feature. Sin slug el gate de escritura queda inactivo.
+- `/flow status` — fase, gate, feature y ruta del spec.
+- `/flow gate <spec|tickets|evidence|review|integration|retro>` — cierra el gate y avanza de fase.
+- `/flow off` — escapatoria; desactiva todo.
+- `/workflow …` — alias.
+
+El gate bloquea escritura (excepto sobre el propio artefacto) desde la fase 5 cuando hay feature declarada y
+falta `.scratch/<feature>/spec.md`; en la fase 6 exige tickets en `.scratch/<feature>/issues`. Las fases 7-10
+son declarativas: el gate se cierra a mano.
+
+La tabla de fases de arriba es la fuente de verdad en prosa; el plugin la refleja en `src/phases.ts`.
+Si cambiás una, cambiá la otra.

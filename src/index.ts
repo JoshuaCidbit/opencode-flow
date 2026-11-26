@@ -3,6 +3,18 @@ import { readFileSync, readdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { Plugin } from "@opencode/plugin"
+import {
+  LAST_PHASE,
+  badGateMessage,
+  help,
+  narration,
+  parseCommand,
+  phase,
+  phaseBrief,
+  phaseByGate,
+  reminder,
+  contextSummary,
+} from "./phases.ts"
 
 const LOG_PREFIX = "[opencode-flow]"
 
@@ -109,6 +121,57 @@ const UNKNOWN_GATE = "gate no identificado (revisar historial)"
 
 type Disposable = { dispose: () => Promise<void> }
 
+// Persisted per session in `ctx.storage`. Small JSON; `active:false` disarms every gate.
+type FlowState = {
+  fase: number
+  gate?: string
+  feature?: string
+  active: boolean
+}
+
+type StorageLike = {
+  get(key: string): Promise<unknown>
+  set(key: string, value: unknown): Promise<void>
+}
+
+function isState(value: unknown): value is FlowState {
+  if (!value || typeof value !== "object") return false
+  const typed = value as Record<string, unknown>
+  return typeof typed.fase === "number" && typeof typed.active === "boolean"
+}
+
+function stateKey(sessionID: string): string {
+  return `flow:${sessionID}`
+}
+
+// Subagents have their own sessionID; walk up `parentID` so a child cannot dodge the gate.
+async function resolveState(
+  storage: StorageLike,
+  getSession: (id: string) => Promise<{ parentID?: string | null } | undefined>,
+  sessionID: string,
+): Promise<FlowState | undefined> {
+  const seen = new Set<string>()
+  let current: string | undefined = sessionID
+
+  while (current && !seen.has(current)) {
+    seen.add(current)
+    try {
+      const raw = await storage.get(stateKey(current))
+      if (isState(raw)) return raw
+    } catch {
+      return undefined
+    }
+    let parent: string | undefined | null
+    try {
+      parent = (await getSession(current))?.parentID
+    } catch {
+      parent = undefined
+    }
+    current = parent ?? undefined
+  }
+  return undefined
+}
+
 /**
  * Load the flow contract. A custom path can be supplied through plugin options:
  * { "package": "opencode-flow", "options": { "path": "/abs/flow.md" } }
@@ -181,7 +244,22 @@ function push(event: { system?: unknown }, text: string, kind: string): void {
   event.system.push({ type: "text", text })
 }
 
-export { addendum, lastState }
+export { addendum, flowAddendum, lastState }
+
+// Storage first, narration line as fallback. It never invents a phase.
+function flowAddendum(state: FlowState | undefined, messages: unknown): string {
+  if (state) {
+    return [
+      "# Estado del flow (compactación)",
+      "Además del contrato de compactación, preservá estos campos en el resumen:",
+      `- Fase actual del mapa: fase ${state.fase}`,
+      `- Gate pendiente: ${state.gate ?? "checkpoint aprobado por el usuario"}`,
+      `- Feature: ${state.feature ?? "no declarada"}`,
+      `- Flow activo: ${state.active ? "sí" : "no"}`,
+    ].join("\n")
+  }
+  return addendum(messages)
+}
 
 export default Plugin.define({
   id: "opencode-flow",
@@ -191,19 +269,129 @@ export default Plugin.define({
 
     const registrations: Disposable[] = []
 
-    // Full contract on every normal request and on explicit generation.
-    for (const kind of ["context", "generate"] as const) {
+    const storage = ctx.storage as unknown as StorageLike | undefined
+    if (!storage) {
+      console.error(`${LOG_PREFIX} ctx.storage no disponible; el estado no persistirá entre requests`)
+    }
+
+    const readState = async (sessionID: string): Promise<FlowState | undefined> => {
+      if (!storage) return undefined
+      return resolveState(storage, async (id) => {
+        try {
+          const info = (await ctx.session.get({ sessionID: id })) as { parentID?: string | null } | undefined
+          return info ?? undefined
+        } catch {
+          return undefined
+        }
+      }, sessionID)
+    }
+
+    const writeState = async (sessionID: string, state: FlowState): Promise<void> => {
+      if (!storage) return
+      await storage.set(stateKey(sessionID), state)
+    }
+
+    // `/flow` is a user act, not a model decision. Same logic for both names: there is no alias field.
+    if (ctx.command) {
+      const execute = async (input: { sessionID: string; prompt?: unknown }): Promise<void> => {
+        const root = input.prompt
+        const text =
+          typeof root === "string"
+            ? root
+            : typeof (root as { text?: unknown } | undefined)?.text === "string"
+              ? (root as { text: string }).text
+              : ""
+        const parsed = parseCommand(text ?? "")
+        const previous = await readState(input.sessionID)
+
+        switch (parsed.kind) {
+          case "help":
+            await ctx.session.prompt({ sessionID: input.sessionID, text: parsed.reason ? `${parsed.reason}\n\n${help()}` : help() })
+            return
+          case "bad-gate":
+            await ctx.session.prompt({ sessionID: input.sessionID, text: badGateMessage(parsed.name) })
+            return
+          case "off":
+            await writeState(input.sessionID, { fase: previous?.fase ?? 1, ...(previous?.gate ? { gate: previous.gate } : {}), ...(previous?.feature ? { feature: previous.feature } : {}), active: false })
+            await ctx.session.prompt({
+              sessionID: input.sessionID,
+              text: `${narration(previous?.fase ?? 1, "flow desactivado")}\nFlow desactivado para esta sesión. Reactivá con /flow start [N] [slug].`,
+            })
+            return
+          case "status": {
+            if (!previous || !previous.active) {
+              await ctx.session.prompt({ sessionID: input.sessionID, text: reminder() })
+              return
+            }
+            await ctx.session.prompt({
+              sessionID: input.sessionID,
+              text: [
+                contextSummary(previous),
+                `spec: ${previous.feature ? `.scratch/${previous.feature}/spec.md` : "n/d"}`,
+              ].join(" · "),
+            })
+            return
+          }
+          case "gate": {
+            const target = phaseByGate(parsed.gate)
+            if (!target) {
+              await ctx.session.prompt({ sessionID: input.sessionID, text: badGateMessage(parsed.gate) })
+              return
+            }
+            const next = target.n >= LAST_PHASE ? target.n : target.n + 1
+            const nextPhase = phase(next)
+            const gate = nextPhase?.gate
+            await writeState(input.sessionID, {
+              fase: next,
+              ...(gate ? { gate } : {}),
+              ...(previous?.feature ? { feature: previous.feature } : {}),
+              active: true,
+            })
+            await ctx.session.prompt({ sessionID: input.sessionID, text: phaseBrief(next, previous?.feature) })
+            return
+          }
+          case "start": {
+            const entry = phase(parsed.fase)
+            const gate = entry?.gate
+            await writeState(input.sessionID, {
+              fase: parsed.fase,
+              ...(gate ? { gate } : {}),
+              ...(parsed.feature ?? previous?.feature ? { feature: parsed.feature ?? previous?.feature } : {}),
+              active: true,
+            })
+            await ctx.session.prompt({ sessionID: input.sessionID, text: phaseBrief(parsed.fase, parsed.feature ?? previous?.feature) })
+            return
+          }
+        }
+      }
+
       registrations.push(
-        await ctx.session.hook(kind, (event) => {
-          push(event, contract, kind)
+        await ctx.command.transform((editor) => {
+          editor.add({ name: "flow", description: "Activa el mapa de fases y su gate por artefacto", execute })
+          editor.add({ name: "workflow", description: "Alias de /flow", execute })
         }),
       )
     }
 
-    // Compaction: only the addendum, carrying the phase/gate rescued from the transcript.
+    // Active: short state. Inactive: a one-line reminder. The contract stays on disk as reference.
+    for (const kind of ["context", "generate"] as const) {
+      registrations.push(
+        await ctx.session.hook(kind, async (event) => {
+          const sessionID = String((event as { sessionID?: unknown }).sessionID ?? "")
+          const state = sessionID ? await readState(sessionID) : undefined
+          // Inactive: one line. Active: the phase rules once per turn — the narration instruction
+          // inside them must survive compaction, which `ctx.session.prompt` history does not.
+          push(event, state && state.active ? phaseBrief(state.fase, state.feature) : reminder(), kind)
+        }),
+      )
+    }
+
+    // Compaction: storage-first addendum, narration line as fallback, never an invented phase.
     registrations.push(
-      await ctx.session.hook("compaction", (event) => {
-        push(event, addendum(event.messages), "compaction")
+      await ctx.session.hook("compaction", async (event) => {
+        const sessionID = String((event as { sessionID?: unknown }).sessionID ?? "")
+        const state = sessionID ? await readState(sessionID) : undefined
+        push(event, flowAddendum(state, event.messages), "compaction")
       }),
     )
 
@@ -217,7 +405,7 @@ export default Plugin.define({
       )
     }
 
-    console.log(`${LOG_PREFIX} contrato cargado (${Buffer.byteLength(contract, "utf8")} bytes), ${bundled.length} skills empaquetadas`)
+    console.log(`${LOG_PREFIX} contrato cargado (${Buffer.byteLength(contract, "utf8")} bytes), ${bundled.length} skills empaquetadas, ${storage ? "storage disponible" : "storage NO disponible"}`)
     return async () => {
       await Promise.all(registrations.map((registration) => registration.dispose()))
     }
