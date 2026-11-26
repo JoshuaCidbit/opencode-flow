@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises"
+import { readFileSync, readdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { Plugin } from "@opencode/plugin"
@@ -8,6 +9,98 @@ const LOG_PREFIX = "[opencode-flow]"
 // Portable default: resolve `flow.md` next to this module, not an absolute home path.
 const HERE = dirname(fileURLToPath(import.meta.url))
 const DEFAULT_CONTRACT = join(HERE, "..", "flow.md")
+const SKILLS_ROOT = join(HERE, "..", "skills")
+
+type BundledSkill = {
+  id: string
+  name: string
+  description?: string
+  path: string
+  content: string
+}
+
+type SkillEditorLike = {
+  list(): readonly { id: string }[]
+  add(skill: BundledSkill): void
+}
+
+function unquote(value: string): string {
+  const trimmed = value.trim()
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1)
+  }
+  return trimmed
+}
+
+function frontmatter(text: string): { name?: string; description?: string } {
+  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/)
+  if (!match) return {}
+  const block = match[1]
+  const name = block.match(/^name:\s*(.+)$/m)?.[1]
+  const description = block.match(/^description:\s*(.+)$/m)?.[1]
+  return {
+    ...(name ? { name: unquote(name) } : {}),
+    ...(description ? { description: unquote(description) } : {}),
+  }
+}
+
+// Skills ship with the plugin (like Superpowers): categories/<id>/SKILL.md.
+function readBundledSkills(root: string): BundledSkill[] {
+  const found: BundledSkill[] = []
+  let categories: string[]
+  try {
+    categories = readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+  } catch {
+    return found
+  }
+
+  for (const category of categories) {
+    const categoryDir = join(root, category)
+    let entries: string[]
+    try {
+      entries = readdirSync(categoryDir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+    } catch {
+      continue
+    }
+    for (const id of entries) {
+      const path = join(categoryDir, id, "SKILL.md")
+      let content: string
+      try {
+        content = readFileSync(path, "utf8")
+      } catch {
+        continue
+      }
+      if (!content.trim()) continue
+      const meta = frontmatter(content)
+      found.push({
+        id,
+        name: meta.name ?? id,
+        ...(meta.description ? { description: meta.description } : {}),
+        path,
+        content,
+      })
+    }
+  }
+  return found.sort((a, b) => a.id.localeCompare(b.id))
+}
+
+// Only adds what is absent: never shadows the user's own edits or `npx skills` installs.
+function addMissingSkills(editor: SkillEditorLike, bundled: BundledSkill[]): string[] {
+  const existing = new Set(editor.list().map((skill) => String(skill.id)))
+  const added: string[] = []
+  for (const skill of bundled) {
+    if (existing.has(skill.id)) continue
+    editor.add(skill)
+    added.push(skill.id)
+  }
+  return added
+}
+
+export { addMissingSkills, readBundledSkills }
 
 // The narration line this contract asks for, e.g. "[flow] fase 5 · gate pendiente: evidencia".
 const STATE_RE = /\[flow\]\s*fase\s*(\d+)\s*·\s*gate pendiente:\s*([^\n]+)/gi
@@ -114,7 +207,17 @@ export default Plugin.define({
       }),
     )
 
-    console.log(`${LOG_PREFIX} contrato cargado (${Buffer.byteLength(contract, "utf8")} bytes)`)
+    // Bundled skills: registered in memory only; disk copies (user's or npx) win.
+    const bundled = readBundledSkills(SKILLS_ROOT)
+    if (bundled.length > 0 && ctx.skill && typeof ctx.skill.transform === "function") {
+      registrations.push(
+        await ctx.skill.transform((editor) => {
+          addMissingSkills(editor as unknown as SkillEditorLike, bundled)
+        }),
+      )
+    }
+
+    console.log(`${LOG_PREFIX} contrato cargado (${Buffer.byteLength(contract, "utf8")} bytes), ${bundled.length} skills empaquetadas`)
     return async () => {
       await Promise.all(registrations.map((registration) => registration.dispose()))
     }

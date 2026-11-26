@@ -10,6 +10,19 @@ remembering to load a skill.
 | --- | --- |
 | `context` + `generate` | The full `flow.md` contract (phase map, three gates, checkpoint, verification ladder). |
 | `compaction` | A short addendum asking the summarizer to preserve the current phase, the pending gate, and the edit permission. |
+| `skills` (setup) | The bundled skills the phase map needs, registered in memory only. |
+
+## Bundled skills
+
+The phase map names skills (`grilling`, `to-spec`, `tdd`, …). Like Superpowers, they ship **inside this package**
+under `skills/` and are registered at setup with `ctx.skill.transform`.
+
+- **Add only if missing**: a bundled id is added only when no skill with that id is already registered. Your own
+  edited copy in `~/.agents/skills`, or an install from `npx skills`, always wins.
+- Nothing is copied to disk. Remove the plugin and the bundled skills disappear with it.
+- 14 skills, MIT, taken from [mattpocock/skills](https://github.com/mattpocock/skills) — see `skills/LICENSE`.
+- The bundle is read when the plugin loads. If you edit a bundled skill, reload the plugin (restart or touch
+  `src/index.ts`).
 
 Phase and gate are **rescued from the transcript** with a regex on the narrated line
 `[flow] fase N · gate pendiente: X`. If that line never appears, the addendum says
@@ -18,6 +31,7 @@ Phase and gate are **rescued from the transcript** with a regex on the narrated 
 ## What it does not do
 
 - It never writes to disk. There is no durable state: two terminals cannot contradict each other.
+- It does not install skills to disk: bundled skills are registered in memory for the lifetime of the plugin.
 - It does not change behavior per agent (plan vs build). Plan mode restricts tools by itself; being in build is
   the edit permission.
 - It does not touch the message history, only `event.system`.

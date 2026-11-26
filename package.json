@@ -10,7 +10,8 @@
   },
   "files": [
     "src",
-    "flow.md"
+    "flow.md",
+    "skills"
   ],
   "keywords": [
     "opencode",
