@@ -29,7 +29,8 @@
     "flow"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/"
   },
   "dependencies": {
     "@opencode/plugin": "^2.4.2"
