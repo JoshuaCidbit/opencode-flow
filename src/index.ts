@@ -16,6 +16,12 @@ import {
   contextSummary,
 } from "./phases.ts"
 import { satisfied, gateRequirement, verdictFor, writeTarget } from "./gate.ts"
+import {
+  resolveState,
+  stateKey,
+  type FlowState,
+  type StorageLike,
+} from "./state.ts"
 
 const LOG_PREFIX = "[opencode-flow]"
 
@@ -125,57 +131,6 @@ const UNKNOWN_PHASE = "fase desconocida (revisar historial)"
 const UNKNOWN_GATE = "gate no identificado (revisar historial)"
 
 type Disposable = { dispose: () => Promise<void> }
-
-// Persisted per session in `ctx.storage`. Small JSON; `active:false` disarms every gate.
-type FlowState = {
-  fase: number
-  gate?: string
-  feature?: string
-  active: boolean
-}
-
-type StorageLike = {
-  get(key: string): Promise<unknown>
-  set(key: string, value: unknown): Promise<void>
-}
-
-function isState(value: unknown): value is FlowState {
-  if (!value || typeof value !== "object") return false
-  const typed = value as Record<string, unknown>
-  return typeof typed.fase === "number" && typeof typed.active === "boolean"
-}
-
-function stateKey(sessionID: string): string {
-  return `flow:${sessionID}`
-}
-
-// Subagents have their own sessionID; walk up `parentID` so a child cannot dodge the gate.
-async function resolveState(
-  storage: StorageLike,
-  getSession: (id: string) => Promise<{ parentID?: string | null } | undefined>,
-  sessionID: string,
-): Promise<FlowState | undefined> {
-  const seen = new Set<string>()
-  let current: string | undefined = sessionID
-
-  while (current && !seen.has(current)) {
-    seen.add(current)
-    try {
-      const raw = await storage.get(stateKey(current))
-      if (isState(raw)) return raw
-    } catch {
-      return undefined
-    }
-    let parent: string | undefined | null
-    try {
-      parent = (await getSession(current))?.parentID
-    } catch {
-      parent = undefined
-    }
-    current = parent ?? undefined
-  }
-  return undefined
-}
 
 /**
  * Load the flow contract. A custom path can be supplied through plugin options:
@@ -303,7 +258,9 @@ export default Plugin.define({
       }
     }
 
-    const readState = async (sessionID: string): Promise<FlowState | undefined> => {
+    // A3: `readState` resuelve estado Y dueño. Las escrituras van al dueño (ownerID),
+    // nunca al hijo, para que un subagente no pueda avanzar fases al margen del padre.
+    const readState = async (sessionID: string): Promise<{ state: FlowState; ownerID: string } | undefined> => {
       if (!storage) return undefined
       const base = await resolveState(
         storage,
@@ -318,14 +275,14 @@ export default Plugin.define({
         sessionID,
       )
       if (!base) return undefined
-      const moved = advance(base)
+      const moved = advance(base.state)
       if (!moved) return base
       try {
-        await writeState(sessionID, moved)
+        await writeState(base.ownerID, moved)
       } catch {
         return base
       }
-      return moved
+      return { state: moved, ownerID: base.ownerID }
     }
 
     // `/flow` is a user act, not a model decision. Same logic for both names: there is no alias field.
@@ -339,7 +296,10 @@ export default Plugin.define({
               ? (root as { text: string }).text
               : ""
         const parsed = parseCommand(text ?? "")
-        const previous = await readState(input.sessionID)
+        const resolved = await readState(input.sessionID)
+        // A3: escrituras al dueño; el hijo nunca es dueño del estado.
+        const owner = resolved?.ownerID ?? input.sessionID
+        const previous = resolved?.state
 
         switch (parsed.kind) {
           case "help":
@@ -349,7 +309,7 @@ export default Plugin.define({
             await ctx.session.prompt({ sessionID: input.sessionID, text: badGateMessage(parsed.name) })
             return
           case "off":
-            await writeState(input.sessionID, { fase: previous?.fase ?? 1, ...(previous?.gate ? { gate: previous.gate } : {}), ...(previous?.feature ? { feature: previous.feature } : {}), active: false })
+            await writeState(owner, { fase: previous?.fase ?? 1, ...(previous?.gate ? { gate: previous.gate } : {}), ...(previous?.feature ? { feature: previous.feature } : {}), active: false })
             await ctx.session.prompt({
               sessionID: input.sessionID,
               text: `${narration(previous?.fase ?? 1, "flow desactivado")}\nFlow desactivado para esta sesión. Reactiva con /flow start [N] [slug].`,
@@ -376,7 +336,7 @@ export default Plugin.define({
             const next = target.n >= LAST_PHASE ? target.n : target.n + 1
             const nextPhase = phase(next)
             const gate = nextPhase?.gate
-            await writeState(input.sessionID, {
+            await writeState(owner, {
               fase: next,
               ...(gate ? { gate } : {}),
               ...(previous?.feature ? { feature: previous.feature } : {}),
@@ -388,7 +348,7 @@ export default Plugin.define({
           case "start": {
             const entry = phase(parsed.fase)
             const gate = entry?.gate
-            await writeState(input.sessionID, {
+            await writeState(owner, {
               fase: parsed.fase,
               ...(gate ? { gate } : {}),
               ...(parsed.feature ?? previous?.feature ? { feature: parsed.feature ?? previous?.feature } : {}),
@@ -415,7 +375,8 @@ export default Plugin.define({
       registrations.push(
         await ctx.session.hook(kind, async (event) => {
           const sessionID = String((event as { sessionID?: unknown }).sessionID ?? "")
-          const state = sessionID ? await readState(sessionID) : undefined
+          const resolved = sessionID ? await readState(sessionID) : undefined
+          const state = resolved?.state
           if (!state || !state.active) return
           push(event, phaseBrief(state.fase, state.feature), kind)
         }),
@@ -426,8 +387,8 @@ export default Plugin.define({
     registrations.push(
       await ctx.session.hook("compaction", async (event) => {
         const sessionID = String((event as { sessionID?: unknown }).sessionID ?? "")
-        const state = sessionID ? await readState(sessionID) : undefined
-        push(event, flowAddendum(state, event.messages), "compaction")
+        const resolved = sessionID ? await readState(sessionID) : undefined
+        push(event, flowAddendum(resolved?.state, event.messages), "compaction")
       }),
     )
 
@@ -440,7 +401,8 @@ export default Plugin.define({
       registrations.push(
         await ctx.tool.hook("execute.before", async (event) => {
           const sessionID = String((event as { sessionID?: unknown }).sessionID ?? "")
-          const state = sessionID ? await readState(sessionID) : undefined
+          const resolved = sessionID ? await readState(sessionID) : undefined
+          const state = resolved?.state
           if (!state || !state.active) return
 
           const tool = String((event as { tool?: unknown }).tool ?? "")
