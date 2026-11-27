@@ -38,21 +38,21 @@ function session(over: Partial<VisibilitySession> = {}, capture?: Capture): Visi
 
 // (a) synthetic + caída a prompt -------------------------------------------------
 
-test("(a) reply usa synthetic con delivery steer cuando existe", async () => {
+test("(a) reply usa synthetic con resume:false cuando existe", async () => {
   const capture: Capture = { entries: new Map(), synthetics: [], prompts: [] }
   const result = await reply(session({}, capture), S, "hola")
   assert.equal(result.via, "synthetic")
   assert.equal(capture.synthetics.length, 1)
-  assert.equal((capture.synthetics[0] as { delivery: string }).delivery, "steer")
+  assert.equal((capture.synthetics[0] as { resume: boolean }).resume, false)
   assert.equal(capture.prompts.length, 0)
 })
 
-test("(a) reply cae a prompt si synthetic falta", async () => {
+test("(a) reply cae a prompt con resume:false si synthetic falta", async () => {
   const capture: Capture = { entries: new Map(), synthetics: [], prompts: [] }
   const result = await reply(session({ synthetic: undefined }, capture), S, "hola")
   assert.equal(result.via, "prompt")
   assert.equal(capture.prompts.length, 1)
-  assert.equal((capture.prompts[0] as { delivery: string }).delivery, "steer")
+  assert.equal((capture.prompts[0] as { resume: boolean }).resume, false)
 })
 
 test("(a) reply cae a prompt si synthetic lanza", async () => {

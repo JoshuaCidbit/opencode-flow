@@ -6,16 +6,16 @@
 //   1. `ctx.session.instructions.entry.put/remove` — entries persistentes
 //      (`sessionID`, `key`, `value`). Es la vía documentada para exponer texto por
 //      sesión. Se usa como fuente de verdad del estado visible.
-//   2. `ctx.session.synthetic({ sessionID, ..., delivery })` — respuesta inmediata
-//      en la misma ejecución.
+//   2. `ctx.session.synthetic({ sessionID, text, resume })` — mensaje que el modelo lee
+//      como entrada del usuario, sin que este comando despierte un turno (`resume:false`).
 //
-// Nada de esto está verificado EN PANTALLA: que el TUI muestre las instructions
-// entries es una hipótesis. Por eso todo cae a `ctx.session.prompt` sin lanzar, y
-// cada fallo se registra una vez (regla 1 de silencio). Ver README, sección
-// "Verificación pendiente".
+// Verificado por API en un servidor 2.4.2 aislado (el entry aparece, se refresca y se borra;
+// `resume:false` cuesta 0 tokens). Lo único NO verificado es que el TUI pinte el entry.
+// Por eso todo cae a `ctx.session.prompt` sin lanzar, y cada fallo se registra una vez
+// (regla 1 de silencio). Ver README, sección "Verificación".
 
 import type { FlowState } from "./state.ts"
-import { narration } from "./phases.ts"
+import { narration, stateLine } from "./phases.ts"
 
 /** Key estable del entry: si otro plugin usa otra key, no colisionamos. */
 export const STATE_ENTRY_KEY = "opencode-flow.state"
@@ -48,10 +48,7 @@ export type VisibilityResult = {
 
 /** Texto corto y estable del estado, pensado para una línea de TUI. */
 export function stateSummary(state: FlowState): string {
-  const parts = [`fase ${state.fase}`, state.active ? "activo" : "inactivo"]
-  if (state.feature) parts.push(`feature ${state.feature}`)
-  if (state.gate) parts.push(`gate ${state.gate}`)
-  return `[flow] ${parts.join(" · ")}`
+  return stateLine(state)
 }
 
 /**
@@ -85,24 +82,30 @@ export async function syncStateEntry(
 }
 
 /**
- * Emite la respuesta al usuario: `synthetic` con `delivery:"steer"` si existe, si no
- * `prompt`. Nunca lanza: un comando que revienta en la cara del usuario es peor que
- * uno que no responde.
+ * Emite la respuesta al usuario sin arrancar un turno del agente.
  *
- * Razón de `steer`: medido sobre los tipos de 2.4.2, `Session.Inbox.Delivery` es
- * `Literal(["steer","queue"])`. `steer` despierta la ejecución de la sesión; `queue`
- * deja el mensaje en la bandeja de entrada. Para la respuesta de un `/flow` queremos
- * lo primero. (Efecto observado, no medido en pantalla: ver README.)
+ * Medido en un servidor 2.4.2 aislado (ver PUBLISHING.md y el CHANGELOG): `synthetic` con
+ * `delivery:"steer"` (lo que hacíamos antes) DESPIERTA la ejecución y gasta un turno real —
+ * 37/1359/408 tokens de entrada y 129/96/164 de salida para help/status/off, más 3-4
+ * mensajes de asistente con herramientas. `resume:false` deja el mensaje en la bandeja y
+ * cuesta 0 tokens, sin crear ningún mensaje de asistente. Es la opción correcta para una
+ * respuesta informativa: el texto lo verá el usuario y el modelo lo leerá en su próximo
+ * turno, sin que este comando lo despierte.
+ *
+ * `resume:true` queda disponible para el raro caso en que la respuesta DEBA iniciar trabajo.
+ * Nunca lanza: un comando que revienta en la cara del usuario es peor que uno que no responde.
  */
 export async function reply(
   session: VisibilitySession | undefined,
   sessionID: string,
   text: string,
+  options: { resume?: boolean } = {},
 ): Promise<VisibilityResult> {
+  const resume = options.resume ?? false
   const synthetic = session?.synthetic
   if (typeof synthetic === "function") {
     try {
-      await synthetic.call(session, { sessionID, text, delivery: "steer" })
+      await synthetic.call(session, { sessionID, text, resume })
       return { via: "synthetic", entryUpdated: false }
     } catch {
       // Cae a prompt() más abajo: la respuesta es más importante que el mecanismo.
@@ -111,18 +114,13 @@ export async function reply(
   const prompt = session?.prompt
   if (typeof prompt === "function") {
     try {
-      await prompt.call(session, { sessionID, text, delivery: "steer" })
+      await prompt.call(session, { sessionID, text, resume })
       return { via: "prompt", entryUpdated: false }
     } catch {
       return { via: "none", entryUpdated: false }
     }
   }
   return { via: "none", entryUpdated: false }
-}
-
-/** Una línea de narración para transiciones, reutilizable por los comandos. */
-export function transitionLine(state: FlowState): string {
-  return narration(state.fase, state.gate ?? "ninguno")
 }
 
 /**
