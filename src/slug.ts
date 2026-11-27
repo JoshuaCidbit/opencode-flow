@@ -7,7 +7,14 @@
 // Por qué el provisional usa el sessionID y no el título de sesión: medido en 2.4.2, ni
 // ctx.session.get ni session.list devuelven `title` en sesiones nuevas. Verificado en sonda A7.
 
-/** Longitud máxima de un slug de feature (compartida por slugify, isValidSlug y el presupuesto del contrato). */
+/**
+ * Tope de un slug. ÚNICA fuente del número: la consumen `slugify`, `isValidSlug`,
+ * `readFeatureMarker`, el recorte por colisión y los textos de ayuda.
+ *
+ * El valor es 60 y no otro porque por aquí pasa el PRESUPUESTO del contrato inyectado: cada
+ * `<feature>` del texto se resuelve al slug completo, así que un slug más largo lo paga el
+ * modelo en CADA petición. Los tests miden con 60 y exigen margen (ver contract-budget).
+ */
 export const MAX_SLUG = 60
 
 /** Longitud del sufijo provisional tomado del sessionID. */
@@ -52,8 +59,27 @@ export function isValidSlug(value: string): boolean {
 export function slugify(description: string): string | undefined {
   const slug = baseSlug(description)
   if (slug.length === 0) return undefined
-  // Se prefija el nombre reservado en vez de rechazarlo: el usuario pidió esa palabra.
+  // Orden: normalizar -> truncar -> prefijar. Si se prefijara antes de truncar, un nombre
+  // reservado justo en el límite se pasaría de MAX_SLUG al añadirle "x-".
   return RESERVED_WINDOWS.has(slug) ? `${RESERVED_PREFIX}${slug}` : slug
+}
+
+/**
+ * Añade un sufijo de colisión (`-2`, `-3`…) RECORTANDO la base para no pasarse de `MAX_SLUG`.
+ * Sin el recorte, un slug ya en el límite se estiraría por encima del tope al desambiguarlo, y
+ * el contrato pagaría el exceso en cada petición.
+ *
+ * Nunca deja guión final ni doble guión: la base se recorta y se limpia antes de unir.
+ */
+export function withCollisionSuffix(base: string, suffix: string): string {
+  const room = MAX_SLUG - suffix.length
+  const trimmed = room <= 0 ? "" : base.slice(0, room)
+  const joined = trimmed.length === 0 ? suffix : `${trimmed}${suffix}`
+  return joined
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, MAX_SLUG)
+    .replace(/-+$/g, "")
 }
 
 /**

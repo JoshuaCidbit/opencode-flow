@@ -1,6 +1,13 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { MAX_SLUG, PROVISIONAL_SUFFIX_LENGTH, isValidSlug, provisionalSlug, slugify } from "../src/slug.ts"
+import {
+  MAX_SLUG,
+  PROVISIONAL_SUFFIX_LENGTH,
+  isValidSlug,
+  provisionalSlug,
+  slugify,
+  withCollisionSuffix,
+} from "../src/slug.ts"
 
 // ID con el formato real observado en 2.4.2.
 const REAL_SESSION_ID = "ses_de5eb36c3ffeVWceT42N0nD2FG"
@@ -92,4 +99,36 @@ test("slugify: kebab-case básico, acentos y dígitos", () => {
   assert.equal(slugify("Diseño del módulo"), "diseno-del-modulo")
   assert.equal(slugify("Fase 3 gate"), "fase-3-gate")
   assert.equal(slugify("  ---hola   mundo!!--  "), "hola-mundo")
+})
+
+// --- P5: sufijo de colisión y borde de reservados con MAX_SLUG -----------------------------
+
+test("P5: el sufijo de colisión recorta la base y no deja guión suelto", () => {
+  const base = "a".repeat(MAX_SLUG)
+  const withSuffix = withCollisionSuffix(base, "-2")
+  assert.ok(withSuffix.length <= MAX_SLUG, `se pasó: ${withSuffix.length}`)
+  assert.ok(withSuffix.endsWith("-2"), `debe conservar el sufijo: ${withSuffix}`)
+  assert.ok(!withSuffix.includes("--"), "sin doble guión")
+  assert.ok(!withSuffix.endsWith("-"), "sin guión final")
+
+  // Con base que termina en guión, al recortar no debe quedar doble guión.
+  const dashed = `${"b".repeat(MAX_SLUG - 1)}-`
+  const fixed = withCollisionSuffix(dashed, "-2")
+  assert.ok(!fixed.includes("--"), `doble guión en ${fixed}`)
+  assert.ok(fixed.length <= MAX_SLUG, `se pasó: ${fixed.length}`)
+  assert.ok(fixed.endsWith("-2"), `perdió el sufijo: ${fixed}`)
+})
+
+test("P5: reservados de Windows -> normalizar, truncar y DESPUÉS prefijar", () => {
+  const con = slugify("con")
+  assert.equal(con, "x-con", "un reservado se prefija")
+  assert.ok(con.length <= MAX_SLUG, "y no se pasa del tope")
+
+  const long = slugify("x".repeat(200))
+  assert.equal(long.length, MAX_SLUG, `recorta a ${MAX_SLUG}`)
+  assert.equal(long, "x".repeat(MAX_SLUG), "la x repetida no se confunde con el prefijo reservado")
+
+  const border = slugify(`con${"9".repeat(MAX_SLUG - 3)}`)
+  assert.equal(border?.length, MAX_SLUG, `en el borde queda en ${MAX_SLUG}: ${border?.length}`)
+  assert.ok(!border?.startsWith("x-"), "no es reservado: no se prefija")
 })

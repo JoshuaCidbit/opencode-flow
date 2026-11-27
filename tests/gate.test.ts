@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { satisfied, verdictFor, writeTarget, type GateOptions } from "../src/gate.ts"
 import { parseCommand } from "../src/phases.ts"
+import { readFeatureMarker } from "../src/feature.ts"
 
 function project(): string {
   return mkdtempSync(join(tmpdir(), "flow-gate-"))
@@ -226,4 +227,42 @@ test("A10: parseCommand rechaza fase 0 y 11 con error claro", () => {
   const eleven = parseCommand("start 11")
   assert.equal(zero.kind, "help")
   assert.equal(eleven.kind, "help")
+})
+
+// --- P5: frontera del slug en los comandos y en el marcador ------------------------------
+test("P5: start, rename y resume aceptan un slug de 60", () => {
+  const slug = "a".repeat(60)
+  for (const text of [`start 1 ${slug}`, `rename ${slug}`, `resume ${slug}`]) {
+    const parsed = parseCommand(text)
+    assert.ok(parsed.kind !== "help", `"${text.slice(0, 12)}…" dio ayuda`)
+    assert.equal("feature" in parsed ? parsed.feature : undefined, slug)
+  }
+})
+
+test("P5: un slug de 61 se rechaza Y el mensaje cita el límite", () => {
+  const slug = "a".repeat(61)
+  for (const kind of ["start", "rename", "resume"]) {
+    const parsed = parseCommand(`${kind} ${kind === "start" ? `1 ${slug}` : slug}`)
+    assert.equal(parsed.kind, "help", `/flow ${kind} aceptó un slug de 61`)
+    assert.match(parsed.kind === "help" ? (parsed.reason ?? "") : "", /\(1-60\)/, "el motivo cita el límite")
+  }
+})
+
+test("P5: readFeatureMarker ignora slugs fuera de rango o de forma inválida", () => {
+  const root = mkdtempSync(join(tmpdir(), "flow-marker-slug-"))
+  const cases: Array<[string, string]> = [
+    ["demasiado largo", "a".repeat(61)],
+    ["con mayúsculas", "Auth-Core"],
+    ["con punto", "auth.core"],
+    ["con barra", "auth/core"],
+    ["vacío", ""],
+    ["con guión final", "auth-"],
+    ["con doble guión", "auth--core"],
+  ]
+  for (const [label, slug] of cases) {
+    writeFileSync(join(root, ".flow-feature"), JSON.stringify({ slug, createdAt: "2024-01-01T00:00:00.000Z" }))
+    assert.equal(readFeatureMarker(root), undefined, `no ignora el slug ${label}: "${slug}"`)
+  }
+  writeFileSync(join(root, ".flow-feature"), JSON.stringify({ slug: "a".repeat(60), createdAt: "x" }))
+  assert.equal(readFeatureMarker(root)?.slug, "a".repeat(60), "un slug de 60 es válido")
 })

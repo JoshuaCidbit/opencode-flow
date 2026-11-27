@@ -10,7 +10,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { MAX_SLUG } from "./slug.ts"
+import { isValidSlug } from "./slug.ts"
 import { isNonEmptyFile, satisfied } from "./gate.ts"
 
 export const FEATURE_MARKER = ".flow-feature"
@@ -48,13 +48,9 @@ export function readFeatureMarker(projectRoot: string): FeatureMarker | undefine
     const record = parsed as Record<string, unknown>
     const slug = record.slug
     // P5: el marcador lo puede escribir a mano quien quiera, así que se valida con el mismo
-    // rasero que el resto: dentro de MAX_SLUG y con la forma canónica. Un slug fuera de rango
-    // se ignora en vez de propagarse: si no, un marcador escrito a mano estiraría el contrato
-    // inyectado por encima del presupuesto medido.
-    if (typeof slug !== "string") return undefined
-    if (slug.length === 0 || slug.length > MAX_SLUG) return undefined
-    if (!/^[a-z0-9-]+$/.test(slug)) return undefined
-    if (slug.startsWith("-") || slug.endsWith("-") || slug.includes("--")) return undefined
+    // rasero que el resto: `isValidSlug` (dentro de MAX_SLUG y con la forma canónica). Un slug
+    // fuera de rango se ignora en vez de propagarse al contrato inyectado.
+    if (typeof slug !== "string" || !isValidSlug(slug)) return undefined
     return { slug, createdAt: typeof record.createdAt === "string" ? record.createdAt : new Date(0).toISOString() }
   } catch {
     return undefined
