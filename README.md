@@ -135,9 +135,20 @@ auto-advance.
 ## Contract layout and budget
 
 `flow.md` has a **common block** plus one `## Fase N` section per phase. Only the common block and the current
-phase's section are injected. The bundled contract injects at most ~6.3 KB per request; a test fails if any phase
-exceeds 9 KB, leaving room for prose growth. `src/phases.ts` keeps only structural data (number, name, skill,
-closes-with, gate, artifact), and a coherence test fails if the table and sections diverge.
+phase's section are injected. The bundled contract injects at most ~6.4 KB per request measured with the LONGEST
+possible slug (60 chars, `baseSlug`'s cut): a test fails if any phase exceeds 7 KB. `src/phases.ts` keeps only
+structural data (number, name, skill, closes-with, gate, artifact), and a coherence test fails if the table and
+sections diverge.
+
+Two things deliberately live here and NOT in the contract, because they are for maintainers and the contract is
+what the model pays for in every request:
+
+- **Silence is opt-in.** When the flow is off the plugin injects nothing — no reminder, no contract. It stays
+  invisible until the user types `/flow`. And within each turn the flow is conversational: it guides by asking,
+  not by injecting notices.
+- **The contract on disk is the active one.** `flow.md` is prose and is the source of truth for behaviour;
+  `src/phases.ts` holds only the structural data. If the runtime exposes no tool hooks, the write gate disarms
+  itself and says so at startup: it never breaks the session.
 
 ## Bundled skills
 

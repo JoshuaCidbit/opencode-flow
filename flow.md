@@ -6,19 +6,19 @@ Reglas no negociables, activas en cada petición. Si una petición del usuario l
 
 | # | Fase | Skill | Cierra con |
 |---|------|-------|------------|
-| 1 | Entender | `grilling` | `.scratch/<feature>/understanding.md` aprobado por el usuario |
-| 2 | Vocabulario | `domain-modeling` | `.scratch/<feature>/glossary.md` aprobado por el usuario |
-| 3 | Diseño de módulos | `codebase-design` | `.scratch/<feature>/design.md` aprobado por el usuario |
+| 1 | Entender | `grilling` | `understanding.md` aprobado por el usuario |
+| 2 | Vocabulario | `domain-modeling` | `glossary.md` aprobado por el usuario |
+| 3 | Diseño de módulos | `codebase-design` | `design.md` aprobado por el usuario |
 | 4 | Sondear | `prototype` | respuesta a una pregunta de diseño anotada en `design.md` |
-| 5 | Especificar | `to-spec` | `.scratch/<feature>/spec.md` |
+| 5 | Especificar | `to-spec` | `spec.md` |
 | 6 | Trocear | `to-tickets` | tickets verticales con bloqueos |
 | 7 | Implementar | `implement-spec` (con tickets) o `tdd` (sin tickets; siempre en proyectos sin git) | tests en verde |
 | 8 | Revisar | `code-review` contra el spec | hallazgos resueltos |
 | 9 | Publicar | `pr` | PR con evidencia |
 | 10 | Cerrar | `retro` | lecciones registradas |
 
-En fondo: `research` (fuentes primarias). `wait-what` cuando algo no cierra. `handoff` para escalar.
-Saltar una fase exige decir qué riesgo se asume y obtener aceptación explícita del usuario.
+Los artefactos viven todos bajo `.scratch/<feature>/`, menos el prototipo de la fase 4.
+Saltar una fase exige decir el riesgo que se asume. En fondo: `research`, `wait-what` y `handoff`.
 
 ## Tres gates
 
@@ -30,19 +30,18 @@ Saltar una fase exige decir qué riesgo se asume y obtener aceptación explícit
 
 - **Fases 1-6:** sólo en `.scratch/<feature>/**`; en la fase 4 también en `/tmp/opencode-proto-<feature>/**`.
 - **Fases 2-3,** y sólo si ya existían al ejecutar `/flow start`: `CONTEXT.md` y `docs/adr/**`.
-- **Fase 7 en adelante:** código del proyecto, con `.scratch/<feature>/spec.md` escrito (y tickets en la fase 7).
+- **Fase 7 en adelante:** código del proyecto, con `.scratch/<feature>/spec.md` escrito (y tickets solo si se optó por ellos; el camino tdd no los exige).
   Escribir el artefacto dentro de `.scratch/` siempre se permite: el gate nunca es un callejón sin salida.
 - El gate bloquea en el runtime. Si te bloquea, no rodees: escribe el artefacto que falta.
 
-## Checkpoint (entregable de Plan)
+## Formato del checkpoint (fase 1)
 
-Antes de editar código, entrega exactamente:
+Cuando no queden dudas de diseño, entrégalo así, escríbelo en `understanding.md` y espérate:
+lo aprueba el usuario con `/flow next`.
 
 - **Entendí**: qué se pide, con citas `path:line`.
 - **Asumo**: lo no dicho que estoy completando.
 - **Necesito que confirmes**: preguntas abiertas reales.
-
-Pasar a build es la aprobación. No repitas el checkpoint después.
 
 ## Narración obligatoria
 
@@ -70,9 +69,6 @@ Si el manifest no declara suite: dilo en vez de inventar un comando, y verifica 
 
 ## Trigger y gate (plugin `opencode-flow`)
 
-El contrato activo es este archivo en disco: cada petición con flow activo recibe el bloque común
-y la sección de la fase actual.
-
 - `/flow` — activa en fase 1 con slug provisional derivado de la sesión.
 - `/flow <descripción>` — activa en fase 1 con el slug derivado del texto.
 - `/flow start [N] [slug]` — activa/continúa en la fase N.
@@ -82,24 +78,16 @@ y la sección de la fase actual.
 - `/flow gate <spec|tickets|evidence|review|integration|retro>` — cierra el gate y avanza.
 - `/flow off` — escapatoria; desactiva todo. `/workflow …` es alias.
 
-Cuatro reglas de uso:
+Dos reglas de uso:
 
-1. **Silencio mientras está inactivo.** Con el flow apagado el plugin no inyecta nada: ni recordatorio ni
-   contrato. Es opt-in y se mantiene invisible hasta que el usuario escribe `/flow`.
-2. **Silencio en cada turno.** El flow es conversacional: se guía pidiendo, no inyectando avisos.
-3. **Auto-avance por artefacto.** Si el flow está activo en fase 5 y ya existe un `.scratch/<feature>/spec.md`
+1. **Auto-avance por artefacto.** Si el flow está activo en fase 5 y ya existe un `.scratch/<feature>/spec.md`
    **no vacío**, o en fase 6 y ya hay un ticket **no vacío, no oculto y no `README.md`** en
    `.scratch/<feature>/issues/`, la fase avanza sola. Las fases 7-10 son declarativas.
-4. **Avanzar es del usuario.** `/flow next` y `/flow back` los ejecuta sólo el usuario; tú nunca.
+2. **Avanzar es del usuario.** `/flow next` y `/flow back` los ejecuta sólo el usuario; tú nunca.
 
 El gate de escritura aplica lo dicho en «Dónde se escribe». Un `patch` es todo-o-nada sobre el conjunto
 permitido. Las rutas se canonicalizan: `..` y symlinks que escapan del proyecto se bloquean. Un artefacto
 vacío, oculto o llamado `README.md` no cierra el gate.
-
-Si el runtime no expone hooks de herramientas, el gate se desarma y lo dice al arrancar: nunca rompe la sesión.
-
-Las secciones y la tabla de arriba son la fuente de verdad en prosa; `src/phases.ts` guarda sólo los datos
-estructurales. Un test de coherencia falla si divergen: si cambias una, cambia la otra.
 
 ## Fase 1 — Entender
 
@@ -126,7 +114,7 @@ Si ya trae el contexto, confírmalo en una línea y escribe `understanding.md`.
 
 Lee `understanding.md` y fija el vocabulario del diseño: un término, una definición, un nombre. Reutiliza los del código y la documentación; no inventes sinónimos. Las decisiones no obvias van como ADR corta (contexto, decisión, consecuencias). Si dos términos chocan, una pregunta por turno con tu recomendación.
 
-Escribe siempre `.scratch/<feature>/glossary.md`. Si el proyecto ya tenía `CONTEXT.md` o `docs/adr/` (lo detectó el plugin al arrancar), escribe ahí lo aprobado y deja en `glossary.md` un resumen con la referencia. Si no existían, no los crees: propón el contenido.
+Escribe siempre `.scratch/<feature>/glossary.md`, con las ADR cortas en una sección "Decisiones". Sólo si `docs/adr/` ya existía al arrancar pueden ir ahí, con referencia desde `glossary.md`; si no existía, todo va en `glossary.md`.
 
 ## Fase 3 — Diseño de módulos
 

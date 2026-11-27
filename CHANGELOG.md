@@ -13,6 +13,30 @@
   rango cerrado): recortar el contrato es una mejora y no debe romper el test.
 - Quitar el ciclo `phases.ts` -> `gate.ts` -> `phases.ts` que introdujo `artifactPaths` en el
   brief: la función se movió a `phases.ts` (no toca disco, produce texto) y `gate.ts` la importa.
+- El presupuesto se mide con el slug más largo posible (60 caracteres, el corte de `baseSlug`) y
+  no con `abc`: `<feature>` se repite muchas veces y el tamaño real lo paga el modelo.
+- Recorte del bloque común (lo útil para mantenedores pasa a README): fuera las reglas de silencio,
+  «el contrato activo es este archivo», la nota sobre hooks no disponibles y la de coherencia con
+  `phases.ts`. Tabla del mapa con nombres sueltos + nota de la ruta, en vez de repetir
+  `.scratch/<feature>/` diez veces. Máximo 6389 B en fase 1 con slug de 60.
+- Contradicciones corregidas: el checkpoint pasa a «Formato del checkpoint (fase 1)» (se entrega
+  cuando no quedan dudas, se escribe en `understanding.md` y se aprueba con `/flow next`); fuera
+  «Pasar a build es la aprobación», que lo hacía un entregable de Plan y chocaba con la fase 1.
+  La fase 7 dice que los tickets sólo se exigen si se optó por ellos (el camino tdd no los pide).
+- Fase 2: las ADR cortas van en una sección «Decisiones» de `glossary.md` salvo que `docs/adr/`
+  ya existiera; se elimina el «propón el contenido», que dejaba el destino sin decidir.
+- El presupuesto se mide con el slug más largo posible (60 caracteres, el corte de `baseSlug`) y
+  no con `abc`: `<feature>` se repite muchas veces y el tamaño real lo paga el modelo.
+- Recorte del bloque común (lo útil para mantenedores pasa a README): fuera las reglas de silencio,
+  «el contrato activo es este archivo», la nota sobre hooks no disponibles y la de coherencia con
+  `phases.ts`. Tabla del mapa con nombres sueltos + nota de la ruta, en vez de repetir
+  `.scratch/<feature>/` diez veces. Máximo 6389 B en fase 1 con slug de 60.
+- Contradicciones corregidas: el checkpoint pasa a «Formato del checkpoint (fase 1)» (se entrega
+  cuando no quedan dudas, se escribe en `understanding.md` y se aprueba con `/flow next`); fuera
+  «Pasar a build es la aprobación», que lo hacía un entregable de Plan y chocaba con la fase 1.
+  La fase 7 dice que los tickets sólo se exigen si se optó por ellos (el camino tdd no los pide).
+- Fase 2: las ADR cortas van en una sección «Decisiones» de `glossary.md` salvo que `docs/adr/`
+  ya existiera; se elimina el «propón el contenido», que dejaba el destino sin decidir.
 ### Limitación conocida
 - El bloque común se inyecta en TODA petición activa, así que la escalera de verificación y las
   escaladas (que aplican sobre todo desde la fase 7) se pagan también en las fases 1-4. Se acepta

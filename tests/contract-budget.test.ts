@@ -13,20 +13,27 @@ const CONTRACT = readFileSync(join(HERE, "..", "flow.md"), "utf8")
 // su coste se paga por turno. Si se supera, el test falla: o se recorta el contrato,
 // o se sube el número a sabiendas.
 //
-// Medido al fijarlo (v0.3.0 + P1): máximo 6689 bytes en fase 1; el archivo completo ronda 10,3 KB.
-// El margen hasta 7 KB es deliberado: cabe prose nueva sin renegociar el límite.
+// El presupuesto duro es el techo que paga el modelo por petición. No se sube sin decir por qué.
 const BUDGET_BYTES = 7000
-const MEASURED_MAX_BYTES = 6689
+const MEASURED_MAX_BYTES = 6389
+// Medido al fijarlo: ver tabla en el informe. El presupuesto se mide
+// con el slug MÁS LARGO posible, no con "abc": `<feature>` aparece muchas veces y 3 caracteres
+// de más por cada una cambiaban el tamaño real que paga el modelo.
+// 60 es la longitud que corta `baseSlug`, así que es el peor caso alcanzable HOY. `MAX_SLUG` de
+// slug.ts es una constante nueva para P2/P3; mientras `isValidSlug` siga rechazando >40, aquí se
+// usa una constante local: importar MAX_SLUG sería afirmar una coherencia que aún no existe.
+const MAX_SLUG_TEST = 60
+const WORST_SLUG = "a".repeat(MAX_SLUG_TEST)
 
-// Medición real por fase. `worst` identifica la fase más cara: el mensaje de fallo la nombra
-// para que recortar no sea a ciegas. Buffer.byteLength (no `.length`): las tildes y los «»
-// cuentan 2 bytes en UTF-8 y eso es lo que paga el contexto, no los caracteres.
-function measureAll(contract: string): { bytes: number[]; worst: number; worstPhase: number } {
+// Buffer.byteLength (no `.length`): las tildes y los «» cuentan 2 bytes en UTF-8 y eso es lo
+// que paga el contexto, no los caracteres. `worst` identifica la fase más cara para que el
+// mensaje de fallo nombre dónde recortar.
+function measureAll(contract: string, slug: string): { bytes: number[]; worst: number; worstPhase: number } {
   const bytes: number[] = []
   let worst = 0
   let worstPhase = 0
   for (let n = FIRST_PHASE; n <= LAST_PHASE; n++) {
-    const size = Buffer.byteLength(renderFor(contract, n).text, "utf8")
+    const size = Buffer.byteLength(scopeToFeature(renderFor(contract, n).text, slug), "utf8")
     bytes.push(size)
     if (size > worst) {
       worst = size
@@ -35,29 +42,30 @@ function measureAll(contract: string): { bytes: number[]; worst: number; worstPh
   }
   return { bytes, worst, worstPhase }
 }
+const { bytes: PER_PHASE, worst, worstPhase } = measureAll(CONTRACT, WORST_SLUG)
+const TABLE = () => PER_PHASE.map((b, i) => `${i + 1}=${b}`).join(", ")
+const SLUG_NOTE = () => `slug de ${MAX_SLUG_TEST} caracteres ("${WORST_SLUG.slice(0, 8)}…")`
 
-const { bytes: PER_PHASE, worst, worstPhase } = measureAll(CONTRACT)
-
-test("A2: presupuesto de tamaño de lo inyectado por petición", () => {
+test("A2: presupuesto con el slug más largo posible", () => {
   assert.ok(
     worst <= BUDGET_BYTES,
-    `la fase ${worstPhase} inyecta ${worst} bytes, presupuesto ${BUDGET_BYTES}. ` +
-      `Recorta el contrato o sube el presupuesto a sabiendas. Por fase: ${PER_PHASE.map((b, i) => `${i + 1}=${b}`).join(", ")}`,
+    `la fase ${worstPhase} inyecta ${worst} bytes con ${SLUG_NOTE()}, techo ${BUDGET_BYTES}. Por fase: ${TABLE()}`,
   )
-  // Registro de la medida al fijar el presupuesto: sirve para ver la deriva del contrato.
-  assert.equal(worst, MEASURED_MAX_BYTES, `el máximo medido cambió (fase ${worstPhase}); actualiza MEASURED_MAX_BYTES y el CHANGELOG`)
+  assert.equal(
+    worst,
+    MEASURED_MAX_BYTES,
+    `el máximo medido cambió (fase ${worstPhase}, ${SLUG_NOTE()}); actualiza MEASURED_MAX_BYTES y el CHANGELOG. Por fase: ${TABLE()}`,
+  )
   assert.ok(MEASURED_MAX_BYTES <= BUDGET_BYTES)
 })
 
 test("A2: el margen deja sitio para prose nueva", () => {
-  // El techo es el presupuesto duro (7000). El suelo es bajo a propósito: recortar el
-  // contrato es una mejora y NO debe romper el test, así que sólo se exige que quede aire.
-  // Si el margen llegara a 0, cualquier añadido futuro exigiría renegociar el límite.
+  // Techo duro 7000. El suelo es bajo a propósito: recortar el contrato es una mejora y NO debe
+  // romper el test, así que sólo se exige que quede aire para prose nueva.
   const margin = BUDGET_BYTES - worst
   assert.ok(
     margin >= 150,
-    `margen de ${margin} bytes (fase ${worstPhase}): por debajo del suelo de 150 B; ` +
-      `recorta el contrato. Por fase: ${PER_PHASE.map((b, i) => `${i + 1}=${b}`).join(", ")}`,
+    `margen de ${margin} bytes (fase ${worstPhase}, ${SLUG_NOTE()}): por debajo del suelo de 150 B; recorta el contrato. Por fase: ${TABLE()}`,
   )
   assert.ok(worst <= BUDGET_BYTES, `la fase ${worstPhase} inyecta ${worst} bytes, techo ${BUDGET_BYTES}`)
 })
@@ -170,14 +178,34 @@ test("A2: la tabla del contrato coincide con phases.ts (nº, fase, skill, cierre
 
   assert.equal(rows.length, PHASES.length, "la tabla debe tener una fila por fase")
 
-  const norm = (s: string) => s.trim().replace(/`/g, "")
+  // La tabla nombra el artefacto SUELTO (`understanding.md`) y la ruta completa vive en una nota
+  // al pie y en el "Cierra con" de cada sección: repetir `.scratch/<feature>/` diez veces costaba
+  // cientos de bytes de un presupuesto que se paga en cada petición. Restar el prefijo conocido
+  // NO relaja la comparación: sigue siendo `assert.equal` sobre el resto del texto, y un test
+  // aparte (abajo) exige que la nota con la ruta exista para que la información no se pierda.
+  const PREFIX = ".scratch/<feature>/"
+  const norm = (s: string) => {
+    const bare = s.trim().replace(/`/g, "")
+    return bare.startsWith(PREFIX) ? bare.slice(PREFIX.length) : bare
+  }
   for (const cells of rows) {
     const n = Number(cells[0])
     const entry = phase(n)
     assert.ok(entry, `la fila ${n} de la tabla no existe en phases.ts`)
     assert.equal(norm(cells[1]), entry.name, `fase ${n}: nombre en tabla`)
     assert.equal(norm(cells[2]), entry.skill, `fase ${n}: skill en tabla`)
-    assert.equal(norm(cells[3]), entry.closes, `fase ${n}: cierra con en tabla`)
+    assert.equal(norm(cells[3]), norm(entry.closes), `fase ${n}: cierra con en tabla`)
+  }
+})
+
+// Si la tabla deja de repetir la ruta, la ruta tiene que estar en otro sitio del bloque común.
+// Sin este test, "acortar la tabla" sería perder información sin que nada lo delatara.
+test("A2: la nota de la tabla dice dónde viven los artefactos", () => {
+  assert.match(CONTRACT, /Los artefactos viven todos bajo `\.scratch\/<feature>\/`(, menos [^.]*)?\./, "falta la nota con la ruta de los artefactos")
+  for (const n of [1, 2, 3]) {
+    const section = phaseSections(CONTRACT).find((s) => s.n === n)
+    assert.ok(section, `falta la fase ${n}`)
+    assert.match(section.closes, /^\.scratch\/<feature>\/\w+\.md/, `fase ${n}: "Cierra con" debe llevar la ruta completa`)
   }
 })
 
@@ -189,5 +217,62 @@ test("A2: fases con gate verificable declaran artefacto en el contrato", () => {
       assert.ok(section.artifact, `la fase ${entry.n} bloquea: debe declarar su artefacto`)
       assert.match(section.artifact, /spec\.md|issues/, `fase ${entry.n}: artefacto reconocible`)
     }
+  }
+})
+
+// --- Recorte y contradicciones (revisión de P1) -------------------------------------------
+// El bloque común se recortó de todo lo que es para mantenedores (va a README/CHANGELOG) y de
+// dos frases que se contradecían con el resto del contrato. Estos tests fijan lo que NO debe
+// volver: si reaparece "Pasar a build", la fase 1 vuelve a chocar con el checkpoint.
+test("recorte: el bloque común ya no dice 'Pasar a build' ni la frase de silencio inactivo", () => {
+  const { common } = parseSections(CONTRACT)
+  assert.ok(!common.includes("Pasar a build"), "volvio la frase que hacia del checkpoint una entrega de Plan")
+  assert.ok(!common.includes("Silencio mientras está inactivo"), "esa regla es para mantenedores: va en README")
+  assert.ok(!common.includes("Silencio en cada turno"))
+  assert.ok(!common.includes("fuente de verdad en prosa"), "coherencia flow.md/phases.ts: va en CHANGELOG")
+  assert.ok(!common.includes("no expone hooks de herramientas"))
+})
+
+test("recorte: el bloque común ya no exige tickets en la fase 7 sin matices", () => {
+  const { common } = parseSections(CONTRACT)
+  assert.ok(!common.includes("(y tickets en la fase 7)"), "esa frase contradice el camino tdd")
+  assert.ok(
+    common.includes("y tickets solo si se optó por ellos; el camino tdd no los exige"),
+    "la excepcion del camino tdd debe estar dicha en el contrato",
+  )
+})
+
+test("recorte: el checkpoint se llama de la fase 1 y ya no menciona Plan ni build", () => {
+  const { common } = parseSections(CONTRACT)
+  assert.match(common, /## Formato del checkpoint \(fase 1\)/)
+  assert.ok(!/\bPlan\b/.test(common), "el checkpoint no es un entregable de Plan")
+  assert.ok(!/build/.test(common), "build no aparece en el bloque común")
+  // Y el contenido que sí importa se conserva.
+  assert.match(common, /\*\*Entendí\*\*: qué se pide, con citas `path:line`/)
+  assert.match(common, /\*\*Asumo\*\*/)
+  assert.match(common, /\*\*Necesito que confirmes\*\*/)
+})
+
+test("fase 2: las ADR van en glossary.md salvo que docs/adr ya existiera", () => {
+  const body = parseSections(CONTRACT).phases.get(2) ?? ""
+  assert.match(body, /secci[óo]n "Decisiones"/, "las ADR tienen un sitio dentro de glossary.md")
+  assert.match(body, /docs\/adr\//, "menciona la excepción de docs/adr")
+  assert.ok(!body.includes("propón el contenido"), "si no existía, no se propone: todo va en glossary.md")
+  assert.ok(!body.includes("no los crees"), "ídem")
+})
+
+// "Dos reglas de uso" con unItem numerado "4." sería un contrato que se contradice solo: el
+// recorte quitó las reglas 1 y 2 y el renumerado se puede olvidar. El test lo ata.
+test("recorte: las reglas de uso están renumeradas tras quitar dos", () => {
+  const { common } = parseSections(CONTRACT)
+  const label = common.match(/(\w+) reglas de uso:/)
+  assert.ok(label, "falta el rótulo «N reglas de uso»")
+  const words = { una: 1, dos: 2, tres: 3, cuatro: 4 }
+  const declared = words[label[1].toLowerCase() as keyof typeof words]
+  assert.ok(declared, `rótulo no reconocido: ${label[1]}`)
+  const items = common.slice(label.index).match(/^\d+\.\s/gm) ?? []
+  assert.equal(items.length, declared, `el rótulo dice ${declared} y hay ${items.length} reglas`)
+  for (const [i, item] of items.entries()) {
+    assert.equal(item, `${i + 1}. `, `la regla ${item.trim()} debería ser ${i + 1}.`)
   }
 })
