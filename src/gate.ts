@@ -86,7 +86,7 @@ function safeWithin(parent: string, child: string): boolean {
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))
 }
 
-function isNonEmptyFile(absolute: string): boolean {
+export function isNonEmptyFile(absolute: string): boolean {
   try {
     const info = statSync(absolute)
     if (!info.isFile() || info.size === 0) return false

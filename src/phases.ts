@@ -88,6 +88,17 @@ export function narration(fase: number, gate: string): string {
   return `[flow] fase ${fase} · gate pendiente: ${gate}`
 }
 
+/**
+ * Línea única de estado, compartida por el entry de instructions y por los resúmenes.
+ * UNA definición de "cómo se ve el estado": si cambia el formato, cambia aquí.
+ */
+export function stateLine(state: { fase: number; active: boolean; feature?: string; gate?: string }): string {
+  const parts = [`fase ${state.fase}`, state.active ? "activo" : "inactivo"]
+  if (state.feature) parts.push(`feature ${state.feature}`)
+  if (state.gate) parts.push(`gate ${state.gate}`)
+  return `[flow] ${parts.join(" · ")}`
+}
+
 // ---- subcommand parsing ----------------------------------------------------
 // Tolerant by design: anything unrecognised degrades to help. It never throws.
 

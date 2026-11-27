@@ -141,3 +141,34 @@ export async function resolveState(
   }
   return undefined
 }
+/**
+ * Construye un `FlowState` a partir de campos opcionales. UNA sola definición de qué
+ * claves se guardan y con qué forma; los comandos no repiten el mismo spread cada uno.
+ * `gate`/`feature`/`slugProvisional`/`ticketsOpted`/`allow` sólo aparecen si tienen valor.
+ */
+export type StateSeed = {
+  fase: number
+  active: boolean
+  gate?: string
+  feature?: string
+  slugProvisional?: boolean
+  ticketsOpted?: boolean
+  allow?: string[]
+}
+
+export function buildState(seed: StateSeed): FlowState {
+  return {
+    fase: seed.fase,
+    active: seed.active,
+    ...(seed.gate ? { gate: seed.gate } : {}),
+    ...(seed.feature ? { feature: seed.feature } : {}),
+    ...(seed.slugProvisional ? { slugProvisional: true } : {}),
+    ...(seed.ticketsOpted === undefined ? {} : { ticketsOpted: seed.ticketsOpted }),
+    ...(seed.allow && seed.allow.length > 0 ? { allow: seed.allow } : {}),
+  }
+}
+/**
+ * Busca el estado subiendo por la cadena de `parentID`.
+ * Devuelve `{ state, ownerID }` para que el llamador escriba siempre en el dueño.
+ * Devuelve undefined si ningún ancestro tiene estado.
+ */
