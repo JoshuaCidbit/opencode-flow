@@ -2,7 +2,16 @@
 
 ## 0.3.0
 
-Reescritura del contrato en secciones y del gate por rutas (A2 + A10 + Gate B + C1/C2/C7).
+Reescritura del contrato por secciones, gate por rutas, comandos de reanudación y puerta 7 con
+tickets (A2 + A10 + Gate B + C1/C2/C7). Etiqueta pendiente de la prueba manual en la TUI.
+
+### Visibilidad del estado (medida, no inferida)
+- Las respuestas de comando usan `synthetic` con `resume:false`: **0 tokens, 0 coste y 0 mensajes de
+  asistente** medidos en un servidor 2.4.2 aislado (antes, con `delivery:"steer"`, 37-1359 tokens de
+  entrada y 3-4 mensajes por `help`/`status`/`off`). El texto queda en la bandeja como `type:"synthetic"`.
+- `instructions.entry` verificado de punta a punta: el entry `opencode-flow.state` aparece en
+  `/flow start`, se refresca en cada cambio de estado (`next`/`back`/`rename`/`gate`/`resume`/
+  auto-avance) y se borra en `/flow off`.
 
 ### Contrato (A2)
 - `flow.md` ahora tiene un **bloque común** y una sección `## Fase N` por fase. En cada petición activa se
@@ -19,9 +28,9 @@ Reescritura del contrato en secciones y del gate por rutas (A2 + A10 + Gate B + 
   - fases 1-6: sólo `.scratch/<feature>/**`; fase 4 también `/tmp/opencode-proto-<feature>/**`.
   - fases 2-3: también `CONTEXT.md` y `docs/adr/**`, **sólo si existían al `/flow start`** (congelado en
     `state.allow`; no se abre a posteriori).
-  - fase 7+: código del proyecto exige `spec.md`. Los tickets se exigen **sólo si el usuario pasó por la fase 6**
-    o los declaró (`ticketsOpted`): `flow.md` admite implementar con `tdd` sin tickets, y exigirlos inventaría una
-    fase que nunca se recorrió.
+  - fase 7+: código del proyecto exige `spec.md`. Los tickets se exigen **sólo si hubo compromiso**
+    (`ticketsOpted`): recorrer la 6, cerrar `/flow gate tickets` o tener tickets en disco; `flow.md`
+    admite implementar con `tdd`, y exigirlos sin compromiso inventaría una fase que nunca se recorrió.
 - Endurecido:
   - `spec.md` vacío no cierra el gate.
   - tickets vacíos, ocultos, `README.md` o que no sean `.md` no cierran el gate.
@@ -29,7 +38,7 @@ Reescritura del contrato en secciones y del gate por rutas (A2 + A10 + Gate B + 
   - `apply_patch` es todo-o-nada sobre el whitelist.
   - `parseCommand` valida slug `[a-z0-9-]{1,40}` con error claro; rechaza `.` `/` `\` y fases fuera de 1-10.
   - `isState` valida `allow` como `string[]`.
-- `gateVersion` sube a 2.
+- Versión del gate endurecida (antes 1, ahora 2) sin cambiar la forma del estado.
 
 ### Comandos y fases (C1, C2, C7)
 - C1: `/flow <descripción>` deriva el slug con `slugify`; `/flow` sin argumentos usa `provisionalSlug(sessionID)`
@@ -41,11 +50,24 @@ Reescritura del contrato en secciones y del gate por rutas (A2 + A10 + Gate B + 
 
 ### Visibilidad y reanudación (nuevo en esta revisión)
 - `opencode-flow.state` publicado en `session.instructions.entry` en cada cambio de estado y eliminado en
-  `/flow off`. Las respuestas de comando usan `session.synthetic` con `delivery:"steer"`, con caída a
-  `session.prompt`. Las APIs se verificaron contra los tipos de `@opencode/plugin` 2.4.2; **el efecto en la
-  TUI sigue sin confirmar** (ver `PUBLISHING.md`).
-- `.flow-feature` (`{ slug, createdAt }`) en la raíz: huella en disco para retomar sin storage. `deducePhase`
-  delega en `satisfied()` (una sola definición de "artefacto presente").
+  `/flow off`. Las respuestas de comando usan `session.synthetic` con `resume:false` (0 tokens, 0 coste,
+  ver arriba), con caída a `session.prompt`. El render del entry en la TUI **sigue sin confirmar**
+  (ver `PUBLISHING.md`).
+- `.flow-feature` (`{ slug, createdAt }`) en la raíz: huella en disco para retomar sin storage.
+  `deducePhase` deduce también las fases 1-4 por sus artefactos (`understanding.md` → 2,
+  `glossary.md`/`GLOSSARY.md`/`CONTEXT.md` → 3, `design.md` → 4) y delega las 5-6 en `satisfied()`
+  (una sola definición de "artefacto presente", incluye "no vacío").
+- `/flow resume` explica la fase que deduce **y por qué** (`spec de .scratch/<feature>/`, etc.) y avisa
+  de `/flow back` para corregir un borrador no aprobado. Si hay estado en storage, MANDA: la fase guardada
+  no se sustituye por la deducida, y el mensaje lo dice.
+- Puerta 7 con tickets: `ticketsOpted` (tri-estado) se activa al avanzar desde una 6 recorrida, al
+  cerrar `/flow gate tickets` o al encontrar tickets en disco; al retomar ya en 6/7 sin tickets queda
+  `false` (camino `tdd`) para que `/flow next` no exija lo que nunca se prometió. El gate de escritura
+  y `/flow status` ahora CONSIDERAN el flag (antes el hook no lo pasaba y adoptarlo no endurecía nada).
+- Tests de integración que ejercitan los **hooks registrados** (`execute.before`, comandos) contra un
+  `ctx` falso: compromiso sin tickets bloquea `src/`, el auto-avance 6→7 por ticket persiste
+  `ticketsOpted:true`, y `/flow status` coincide con el hook en ambos caminos. Al montarlo apareció el
+  bug del mensaje `exige ; escríbelo` cuando faltaban sólo tickets: ahora nombra `spec` y/o `tickets`.
 - `state.allow` se recalcula en `/flow start`, `/flow resume` y `/flow back`; queda fijo dentro de una
   ejecución.
 - C7: el auto-avance por artefacto se anuncia con la fase anterior, la nueva y `/flow back`.
@@ -57,8 +79,9 @@ Reescritura del contrato en secciones y del gate por rutas (A2 + A10 + Gate B + 
 - `THIRD_PARTY_NOTICES.md` con la atribución MIT de `mattpocock/skills`.
 
 ### Limitaciones conocidas
-- **Visibilidad en la TUI sin verificar.** `session.instructions.entry` y el efecto de `delivery:"steer"` sólo
-  están contrastados con los tipos del runtime, no en pantalla.
+- **Render del entry en la TUI sin verificar.** `session.instructions.entry` está verificado por API
+  (aparece, se refresca, se borra) pero falta confirmar que la interfaz lo pinte. `resume:false` está
+  medido: 0 tokens y 0 mensajes de asistente.
 - **Sin dedup por marcador** entre `context` y `generate`: en 2.4.2 no co-disparan en la misma petición (verificado
   contra sus tipos); si un runtime futuro los disparara ambos, habría texto repetido, nunca estado corrupto.
   No hay marcador de deduplicación; se deja como limitación conocida.

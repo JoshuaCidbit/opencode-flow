@@ -17,20 +17,25 @@ remembering to load a skill.
 What is injected in `event.system` does **not** persist in message history, which is why the contract is
 re-rendered per request instead of relying on "the first turn".
 
-## Verificación pendiente (no afirmada como cierta)
+## Verificación (medida en un servidor OpenCode 2.4.2 aislado)
 
-La **visibilidad del estado en la TUI no está comprobada en una sesión real**. Lo que hay verificado
-es el contrato del runtime, leyendo sus tipos en `@opencode/plugin` 2.4.2:
+Lo verificable por API **está medido**, no inferido de los tipos:
 
-- `ctx.session.instructions.entry.put/remove` existen y admiten `{ sessionID, key, value }`. El plugin
-  publica la key `opencode-flow.state` y la elimina en `/flow off`.
-- `ctx.session.synthetic` existe y admite `delivery`, cuyos únicos valores son `"steer"` (despierta la
-  ejecución) y `"queue"` (deja el mensaje en bandeja). Los comandos usan `steer`.
-- Todo esto cae a `ctx.session.prompt` y registra un aviso una sola vez si algo falla.
+- `ctx.session.instructions.entry.put/remove/…` con la key `opencode-flow.state`: se comprobó por HTTP
+  (`GET /api/experimental/session/:id/instructions/entries`) que el entry **aparece** al ejecutar
+  `/flow start`, **se actualiza en cada cambio de estado** (`next`, `back`, `rename`, `gate`, `resume`,
+  auto-avance) y **desaparece** en `/flow off`. Resultado medido post-`start`:
+  `opencode-flow.state="[flow] fase 1 · activo · feature auth"`.
+- Las respuestas de comando (`help`, `status`, `off`) usan `synthetic` con `resume:false`, NO
+  `delivery:"steer"`. Medido en ese servidor: **0 tokens de entrada, 0 de salida, 0 de coste y 0
+  mensajes de asistente** por respuesta. Con `steer` se arrancaba un turno real (37-1359 tokens de
+  entrada y 3-4 mensajes de asistente). El texto queda en la bandeja de la sesión
+  (`type:"synthetic"` en `GET /api/session/:id/inbox`) y se muestra en el siguiente turno.
+- Si `synthetic` no existe, cae a `prompt` y registra un aviso una sola vez.
 
-Lo que **no** está verificado es el efecto en pantalla: que OpenCode muestre ese entry, y que `steer`
-provoque exactamente la interrupción esperada. Hasta que alguien lo confirme en una sesión real,
-trata la visibilidad como experimental; el resto del flow (fases, gate, contrato) no depende de ella.
+Lo que **sigue sin verificarse** es el render del entry en la TUI: el estado existe y se refresca en
+el servidor, pero que la interfaz lo pinte es cosa de OpenCode. Trata esa línea como experimental; el
+resto del flow (fases, gate, contrato) no depende de ella.
 
 ## Install
 
@@ -95,7 +100,10 @@ storage does not lose the flow:
 - `ctx.storage` per session (key `flow:<sessionID>`), the primary source.
 - `.flow-feature` in the project root, holding `{ slug, createdAt }`. That marker is how the plugin
   notices an in-flight flow on a new session, deduces the earned phase from artifacts on disk
-  (spec present → resume at 6; tickets too → 7), and offers to resume exactly that feature.
+  (`understanding.md` → 2, `glossary.md`/`GLOSSARY.md`/`CONTEXT.md` → 3, `design.md` → 4,
+  spec → 6; tickets too → 7), and offers to resume exactly that feature. `/flow resume` says which
+  phase it deduced and from which artifact, and points to `/flow back` if that artifact was not
+  approved. **Storage wins:** when a phase is stored for the session, resume keeps it and says so.
 
 - **Inactive means silent.** With `active !== true` the plugin injects nothing into `context`/`generate` —
   no reminder, no contract. The flow is opt-in and stays invisible until you run `/flow`.
@@ -109,6 +117,10 @@ The gate is a filesystem policy, not a guess from file names. It checks every `w
   ran**. That snapshot is stored as `allow: string[]`; creating them later does not open the gate retroactively.
 - **Phase 7 and later:** project code, only with `.scratch/<feature>/spec.md` written (and tickets in phase 7).
   Writing the spec/tickets inside `.scratch/` is always allowed, so the gate is never a dead end.
+  Tickets are required **only if you committed to them** (`ticketsOpted`): by `/flow next` from a
+  phase 6 you actually walked, by `/flow gate tickets`, or when `/flow resume` finds tickets already
+  on disk. Resuming straight into 6/7 without tickets records `ticketsOpted:false` (the `tdd` path),
+  so nothing demands tickets. Otherwise demanding them would invent a phase 6 you never walked.
 
 Safety hardening: an artifact only closes a gate if it is non-empty and not a placeholder (`README.md`, hidden
 files). Paths are resolved and canonicalized (`..` and symlinks that escape the project are blocked), and patches

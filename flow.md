@@ -161,6 +161,14 @@ los supuestos. Sigue en loop con el usuario hasta que apruebe; el gate se abre s
 - Skill: `implement-spec (con tickets) o tdd (sin tickets; siempre en proyectos sin git)`
 - Gate: `evidence`
 - Cierra con: tests en verde
+- **Cuándo los tickets son requisito.** El gate de escritura de la fase 7 exige `spec.md` siempre,
+  y tickets SÓLO si hubo compromiso (`ticketsOpted`). El compromiso se activa cuando:
+  1. `/flow next` desde una fase 6 **recorrida** (no deducida al retomar): elegiste ese camino;
+  2. `/flow gate tickets`: cierre explícito de esa puerta;
+  3. `/flow resume` encuentra tickets ya en disco: lo escrito manda.
+  Si retomas ya en 6/7 sin tickets, el estado recuerda `ticketsOpted:false` (camino `tdd`) y explicitar
+  `/flow next` no los exige; si ninguno de los tres ocurrió, exigir tickets inventaría una fase 6 que
+  no recorriste.
 
 ## Fase 8 — Revisar
 
