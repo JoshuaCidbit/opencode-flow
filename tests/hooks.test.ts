@@ -1,0 +1,266 @@
+// Arnés de INTEGRACIÓN: levanta el plugin real (`Plugin.define`) contra un `ctx` falso y
+// dispara los HOOKS REGISTRADOS, no sólo las funciones auxiliares.
+//
+// Por qué existe: los tests de `gate.ts` comprueban la política, pero el bug real de esta
+// ronda estaba en el CABLEADO — el hook `execute.before` no pasaba `ticketsOpted` a
+// `verdictFor`, así que adoptar tickets no endurecía nada. Ese fallo sólo se ve ejercitando
+// el hook, igual que lo dispara el runtime.
+
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import plugin from "../src/index.ts"
+
+type HookName = string
+type Hook = (event: unknown) => Promise<unknown>
+type FlowState = Record<string, unknown> & { fase: number }
+
+export type Harness = {
+  /** Proyecto temporal (raíz del gate). */
+  readonly root: string
+  /** Estado en storage por clave (`flow:<sessionID>`). */
+  readonly store: {
+    get(key: string): Promise<unknown>
+    set(key: string, value: unknown): Promise<void>
+    entries(): Map<string, unknown>
+  }
+  /** Textos emitidos por `synthetic` (las respuestas de comando). */
+  readonly replies: string[]
+  /** Ejecuta `/flow ...` por la vía real: el execute que registró el plugin. */
+  run(sessionID: string, text: string): Promise<void>
+  /** Dispara `execute.before` como el runtime. Devuelve el mensaje de error, o undefined. */
+  write(sessionID: string, file: string, tool?: string): Promise<string | undefined>
+  /** Lee el estado persistido de una sesión. */
+  state(sessionID: string): FlowState | undefined
+}
+
+/** `ctx` mínimo pero HONESTO: mismo cableado que el runtime, dobles en vez de cliente HTTP. */
+export async function harness(initial?: {
+  root?: string
+  /** Estado inicial por sessionID (sin prefijo `flow:`). */
+  states?: Record<string, FlowState>
+}): Promise<Harness> {
+  const root = initial?.root ?? mkdtempSync(join(tmpdir(), "flow-hook-"))
+  const map = new Map<string, unknown>()
+  for (const [sessionID, value] of Object.entries(initial?.states ?? {})) {
+    map.set(`flow:${sessionID}`, value)
+  }
+
+  const replies: string[] = []
+  const hooks = new Map<HookName, Hook[]>()
+  const sessionHooks = new Map<HookName, Hook[]>()
+  let execute: ((input: { sessionID: string; prompt?: unknown }) => Promise<void>) | undefined
+
+  const store = {
+    async get(key: string) {
+      return map.get(key)
+    },
+    async set(key: string, value: unknown) {
+      map.set(key, value)
+    },
+    entries() {
+      return map
+    },
+  }
+
+  // Firma REAL del runtime: `hook(name, callback)` con DOS argumentos. Currificarlo tragaría
+  // el callback en silencio y el arnés parecería funcionar sin registrar nada.
+  const record = (bucket: Map<HookName, Hook[]>) => async (name: HookName, hook: Hook) => {
+    const list = bucket.get(name) ?? []
+    list.push(hook)
+    bucket.set(name, list)
+    return { dispose: async () => undefined }
+  }
+
+  const ctx = {
+    // El plugin resuelve el proyecto desde aquí: sin esto, el gate miraría otro cwd.
+    location: { project: { directory: root } },
+    options: {},
+    storage: store,
+    logger: { error: () => undefined, debug: () => undefined },
+    session: {
+      get: async () => undefined,
+      hook: record(sessionHooks),
+      instructions: {
+        entry: {
+          put: async () => undefined,
+          remove: async () => undefined,
+        },
+      },
+      synthetic: async (input: { text?: string }) => {
+        replies.push(String(input.text ?? ""))
+      },
+      prompt: async (input: { text: string }) => {
+        replies.push(input.text)
+      },
+    },
+    tool: {
+      hook: record(hooks),
+    },
+    command: {
+      // El runtime pasa un CALLBACK al que entrega un editor; el plugin hace `editor.add({ execute })`.
+      // Se captura ese execute para que `run` ejercite el mismo camino que un `/flow` de verdad.
+      transform: async (apply: (editor: { add: (command: { execute: (input: { sessionID: string; prompt?: unknown }) => Promise<void> }) => void }) => void) => {
+        apply({
+          add: (command: { execute: (input: { sessionID: string; prompt?: unknown }) => Promise<void> }) => {
+            execute = command.execute
+          },
+        })
+        return { dispose: async () => undefined }
+      },
+    },
+    skill: {
+      transform: async () => ({ dispose: async () => undefined }),
+    },
+  }
+
+  await plugin.setup(ctx as never)
+
+  const run = async (sessionID: string, text: string) => {
+    if (!execute) throw new Error("el plugin no registró /flow")
+    await execute({ sessionID, prompt: text })
+  }
+
+  const write = async (sessionID: string, file: string, tool = "write") => {
+    const list = hooks.get("execute.before") ?? []
+    assert.ok(list.length > 0, "el plugin no registró execute.before: el gate está desarmado")
+    for (const hook of list) {
+      try {
+        await hook({ tool, sessionID, input: { filePath: file } })
+      } catch (error) {
+        return (error as Error).message
+      }
+    }
+    return undefined
+  }
+
+  return { root, store, replies, run, write, state: (id) => map.get(`flow:${id}`) as FlowState | undefined }
+}
+
+/** `spec.md` con contenido: evidencia necesaria (pero no suficiente) para escribir código. */
+export function spec(root: string, feature = "auth"): void {
+  mkdirSync(join(root, ".scratch", feature), { recursive: true })
+  writeFileSync(join(root, ".scratch", feature, "spec.md"), "# Spec\n\nDe verdad.\n")
+}
+
+/** Un ticket en `issues/`: única forma de cerrar la fase 6. */
+export function ticket(root: string, feature = "auth", name = "001.md"): void {
+  mkdirSync(join(root, ".scratch", feature, "issues"), { recursive: true })
+  writeFileSync(join(root, ".scratch", feature, "issues", name), `# Ticket ${name}\n\nCuerpo.\n`)
+}
+
+// --- (a) fase 7 con compromiso y sin tickets -> execute.before bloquea una escritura en src/ ---
+
+test("hooks (a): fase 7 con compromiso bloquea src/ mientras no haya tickets", async () => {
+  const root = mkdtempSync(join(tmpdir(), "flow-hook-real-"))
+  spec(root)
+  const h = await harness({ root })
+  await h.run("s1", "start 5 auth")
+  await h.run("s1", "gate tickets") // cierra la 6 -> fase 7 con compromiso
+
+  const state = h.state("s1")
+  assert.equal(state?.fase, 7)
+  assert.equal(state?.ticketsOpted, true, "cerrar la puerta de tickets ES comprometerse")
+
+  const blocked = await h.write("s1", join(root, "src/app.ts"))
+  assert.match(String(blocked), /^GATE:/, "sin tickets en disco, el código del proyecto se bloquea")
+  assert.match(String(blocked), /tickets/)
+
+  ticket(root)
+  assert.equal(await h.write("s1", join(root, "src/app.ts")), undefined, "con tickets, se abre")
+})
+
+test("hooks (a): fase 7 SIN compromiso no exige tickets (camino tdd)", async () => {
+  const root = mkdtempSync(join(tmpdir(), "flow-hook-tdd-"))
+  spec(root)
+  const h = await harness({ root })
+  await h.run("s1", "start 7 auth")
+  assert.equal(h.state("s1")?.ticketsOpted, undefined, "empezar en la 7 no promete tickets")
+  assert.equal(await h.write("s1", join(root, "src/app.ts")), undefined, "tdd escribe código sin tickets")
+})
+
+// --- (b) auto-avance 6->7 por ticket -> ticketsOpted:true y se aplica en la siguiente escritura ---
+
+test("hooks (b): el ticket creado mueve 6 -> 7, fija ticketsOpted y el hook lo usa", async () => {
+  const root = mkdtempSync(join(tmpdir(), "flow-hook-auto-"))
+  spec(root)
+  // Arranca en la 6 sin tickets; el ticket aparece DESPUÉS (lo normal: se crea en la 6).
+  const h = await harness({ root })
+  await h.run("s1", "start 6 auth")
+  assert.equal(h.state("s1")?.fase, 6)
+  ticket(root)
+
+  // La escritura dispara la lectura, que detecta el artefacto y auto-avanza.
+  await h.write("s1", join(root, "src/app.ts"))
+  const moved = h.state("s1")
+  assert.equal(moved?.fase, 7, "el ticket en disco mueve 6 -> 7")
+  assert.equal(moved?.ticketsOpted, true, "si el ticket movió la fase, hubo compromiso")
+
+  // Y el commit persiste: la SIGUIENTE escritura ya se evalúa con ese estado.
+  assert.equal(await h.write("s1", join(root, "src/app.ts")), undefined)
+})
+
+// --- (c) /flow status y execute.before dan el MISMO veredicto en ambos estados ---
+
+test("hooks (c): status y execute.before coinciden con y sin tickets", async () => {
+  const root = mkdtempSync(join(tmpdir(), "flow-hook-status-"))
+  spec(root)
+  const h = await harness({ root })
+  await h.run("s1", "start 5 auth")
+  await h.run("s1", "gate tickets")
+
+  h.replies.length = 0
+  await h.run("s1", "status")
+  assert.match(h.replies.join("\n"), /cerrado \(falta tickets\)/, "status dice que falta tickets")
+  assert.match(String(await h.write("s1", join(root, "src/app.ts"))), /^GATE:/, "y el hook bloquea")
+
+  ticket(root)
+  h.replies.length = 0
+  await h.run("s1", "status")
+  assert.match(h.replies.join("\n"), /abierto \(spec presente \+ tickets\)/)
+  assert.equal(await h.write("s1", join(root, "src/app.ts")), undefined, "y el hook permite")
+})
+
+test("hooks (c): en camino tdd, ni status ni hook piden tickets", async () => {
+  const root = mkdtempSync(join(tmpdir(), "flow-hook-status-tdd-"))
+  spec(root)
+  const h = await harness({ root })
+  await h.run("s1", "start 7 auth")
+
+  h.replies.length = 0
+  await h.run("s1", "status")
+  assert.match(h.replies.join("\n"), /abierto \(spec presente\)/)
+  assert.equal(await h.write("s1", join(root, "src/app.ts")), undefined)
+})
+
+// --- (3) /flow resume: dice qué dedujo y por qué; storage manda sobre el disco ---
+
+test("resume: sin estado, dedice del disco y explica qué artefacto lo sostiene", async () => {
+  const root = mkdtempSync(join(tmpdir(), "flow-resume-why-"))
+  spec(root)
+  const h = await harness({ root })
+  h.replies.length = 0
+  await h.run("s1", "resume auth")
+  const message = h.replies.join("\n")
+  assert.equal(h.state("s1")?.fase, 6, "con spec se retoma en la 6")
+  assert.match(message, /deducid/, "dice que la fase es deducida")
+  assert.match(message, /spec/, "y nombra el artefacto que la sostiene")
+  assert.match(message, /\/flow back/, "y avisa de cómo corregir un borrador no aprobado")
+})
+
+test("resume: el estado en storage TIENE PRIORIDAD sobre la deducción por disco", async () => {
+  const root = mkdtempSync(join(tmpdir(), "flow-resume-priority-"))
+  spec(root) // el disco deduciría 6
+  const h = await harness({
+    root,
+    states: { s1: { fase: 3, feature: "auth", active: true, gate: "checkpoint" } },
+  })
+  h.replies.length = 0
+  await h.run("s1", "resume")
+  const message = h.replies.join("\n")
+  assert.equal(h.state("s1")?.fase, 3, "la fase guardada (3) no se sustituye por la deducida (6)")
+  assert.match(message, /estado guardado/, "y el mensaje dice de dónde viene la fase")
+  assert.match(message, /\/flow back/, "avisando de cómo corregirla")
+})

@@ -50,6 +50,9 @@ export function isState(value: unknown): value is FlowState {
   if (typed.allow !== undefined && (!Array.isArray(typed.allow) || !typed.allow.every((item) => typeof item === "string"))) {
     return false
   }
+  // Puerta 7: el compromiso con tickets es booleano; cualquier otra forma se descarta.
+  if (typed.ticketsOpted !== undefined && typeof typed.ticketsOpted !== "boolean") return false
+  if (typed.slugProvisional !== undefined && typeof typed.slugProvisional !== "boolean") return false
   return true
 }
 
@@ -73,10 +76,14 @@ export function advance(
   const next = state.fase >= lastPhase ? state.fase : state.fase + 1
   // Monotonía: si el cálculo no sube, no hay nada que escribir.
   if (next <= state.fase) return undefined
+  // Si el auto-avance entra en la 7 con tickets ya en disco, ese artefacto fue el que movió
+  // la fase: el compromiso (`ticketsOpted`) se adopta, como en `/flow next` desde la 6.
+  const adopted = next >= 7 && isSatisfied(6, state.feature)
   return {
     ...state,
     fase: next,
     active: true,
+    ...(adopted ? { ticketsOpted: true } : {}),
   }
 }
 
@@ -107,6 +114,32 @@ export async function commitAdvance(
 export function noticeAdvance(before: FlowState, after: FlowState): string | undefined {
   if (after.fase <= before.fase) return undefined
   return `[flow] auto-avance: fase ${before.fase} → ${after.fase} (artefacto detectado en disco). Usa /flow back para retroceder.`
+}
+/**
+ * Construye un `FlowState` a partir de campos opcionales. UNA sola definición de qué
+ * claves se guardan y con qué forma; los comandos no repiten el mismo spread cada uno.
+ * `gate`/`feature`/`slugProvisional`/`ticketsOpted`/`allow` sólo aparecen si tienen valor.
+ */
+export type StateSeed = {
+  fase: number
+  active: boolean
+  gate?: string
+  feature?: string
+  slugProvisional?: boolean
+  ticketsOpted?: boolean
+  allow?: string[]
+}
+
+export function buildState(seed: StateSeed): FlowState {
+  return {
+    fase: seed.fase,
+    active: seed.active,
+    ...(seed.gate ? { gate: seed.gate } : {}),
+    ...(seed.feature ? { feature: seed.feature } : {}),
+    ...(seed.slugProvisional ? { slugProvisional: true } : {}),
+    ...(seed.ticketsOpted === undefined ? {} : { ticketsOpted: seed.ticketsOpted }),
+    ...(seed.allow && seed.allow.length > 0 ? { allow: seed.allow } : {}),
+  }
 }
 /**
  * Busca el estado subiendo por la cadena de `parentID`.
@@ -141,34 +174,3 @@ export async function resolveState(
   }
   return undefined
 }
-/**
- * Construye un `FlowState` a partir de campos opcionales. UNA sola definición de qué
- * claves se guardan y con qué forma; los comandos no repiten el mismo spread cada uno.
- * `gate`/`feature`/`slugProvisional`/`ticketsOpted`/`allow` sólo aparecen si tienen valor.
- */
-export type StateSeed = {
-  fase: number
-  active: boolean
-  gate?: string
-  feature?: string
-  slugProvisional?: boolean
-  ticketsOpted?: boolean
-  allow?: string[]
-}
-
-export function buildState(seed: StateSeed): FlowState {
-  return {
-    fase: seed.fase,
-    active: seed.active,
-    ...(seed.gate ? { gate: seed.gate } : {}),
-    ...(seed.feature ? { feature: seed.feature } : {}),
-    ...(seed.slugProvisional ? { slugProvisional: true } : {}),
-    ...(seed.ticketsOpted === undefined ? {} : { ticketsOpted: seed.ticketsOpted }),
-    ...(seed.allow && seed.allow.length > 0 ? { allow: seed.allow } : {}),
-  }
-}
-/**
- * Busca el estado subiendo por la cadena de `parentID`.
- * Devuelve `{ state, ownerID }` para que el llamador escriba siempre en el dueño.
- * Devuelve undefined si ningún ancestro tiene estado.
- */

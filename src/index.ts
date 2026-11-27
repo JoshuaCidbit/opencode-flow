@@ -16,14 +16,16 @@ import {
   reminder,
   contextSummary,
 } from "./phases.ts"
-import { satisfied, gateRequirement, verdictFor, writeTarget } from "./gate.ts"
+import { adoptsTickets, nextTicketsOpted, resumeTicketsOpted, satisfied, gateRequirement, verdictFor, writeTarget } from "./gate.ts"
 import {
   advance,
+  buildState,
   commitAdvance,
   noticeAdvance,
   resolveState,
   stateKey,
   type FlowState,
+  type StateSeed,
   type StorageLike,
 } from "./state.ts"
 import { makeLogger, OnceLog } from "./log.ts"
@@ -31,7 +33,7 @@ import { decide, WRITING_TOOLS } from "./gate-decision.ts"
 import { renderFor } from "./contract.ts"
 import { provisionalSlug } from "./slug.ts"
 import { reply, syncStateEntry, offMessage } from "./visibility.ts"
-import { deducePhase, readFeatureMarker, writeFeatureMarker } from "./feature.ts"
+import { deducePhaseInfo, readFeatureMarker, writeFeatureMarker } from "./feature.ts"
 
 const LOG_PREFIX = "[opencode-flow]"
 
@@ -422,16 +424,27 @@ export default Plugin.define({
         // Gate B: lo que existía al hacer `/flow start`; se arrastra en cada transición.
         const inheritedAllow = previous?.allow ? { allow: previous.allow } : {}
 
+        /**
+         * Único camino de escritura de un cambio de estado: persiste y sincroniza el entry
+         * de instructions (punto 1b: "en cada cambio de estado", no sólo en start/off).
+         */
+        const commit = async (seed: StateSeed): Promise<FlowState> => {
+          const state = buildState(seed)
+          await writeState(owner, state)
+          await syncStateEntry(ctx.session as never, input.sessionID, state)
+          return state
+        }
+
         switch (parsed.kind) {
           case "help":
-            await ctx.session.prompt({ sessionID: input.sessionID, text: parsed.reason ? `${parsed.reason}\n\n${help()}` : help() })
+            await reply(ctx.session as never, input.sessionID, parsed.reason ? `${parsed.reason}\n\n${help()}` : help())
             return
           case "bad-gate":
-            await ctx.session.prompt({ sessionID: input.sessionID, text: badGateMessage(parsed.name) })
+            await reply(ctx.session as never, input.sessionID, badGateMessage(parsed.name))
             return
           case "off": {
-            const offState = { fase: previous?.fase ?? 1, ...(previous?.gate ? { gate: previous.gate } : {}), ...(previous?.feature ? { feature: previous.feature } : {}), ...inheritedAllow, active: false }
-            await writeState(owner, offState)
+            // No usa `commit`: apagar significa BORRAR el entry, no escribir otro.
+            await writeState(owner, buildState({ fase: previous?.fase ?? 1, ...(previous?.gate ? { gate: previous.gate } : {}), ...(previous?.feature ? { feature: previous.feature } : {}), ...inheritedAllow, active: false }))
             // Punto (b): el entry desaparece al apagar. Si el runtime no expone la API,
             // seguimos: el silencio del flow ya es la señal.
             await syncStateEntry(ctx.session as never, input.sessionID, undefined)
@@ -444,37 +457,41 @@ export default Plugin.define({
           }
           case "status": {
             if (!previous || !previous.active) {
-              await ctx.session.prompt({ sessionID: input.sessionID, text: reminder() })
+              await reply(ctx.session as never, input.sessionID, reminder())
               return
             }
-            const requirement = gateRequirement(previous.fase, previous.feature, projectRoot)
-            await ctx.session.prompt({
-              sessionID: input.sessionID,
-              text: [
+            const requirement = gateRequirement(previous.fase, previous.feature, projectRoot, previous.ticketsOpted)
+            await reply(
+              ctx.session as never,
+              input.sessionID,
+              [
                 contextSummary(previous),
                 requirement ?? "gate: declarativo",
                 ...(lastGateError ? [`AVISO: ${lastGateError}`] : []),
               ].join(" · "),
-            })
+            )
             return
           }
           case "gate": {
             const target = phaseByGate(parsed.gate)
             if (!target) {
-              await ctx.session.prompt({ sessionID: input.sessionID, text: badGateMessage(parsed.gate) })
+              await reply(ctx.session as never, input.sessionID, badGateMessage(parsed.gate))
               return
             }
             const next = target.n >= LAST_PHASE ? target.n : target.n + 1
             const nextPhase = phase(next)
             const gate = nextPhase?.gate
-            await writeState(owner, {
+            await commit({
               fase: next,
               ...(gate ? { gate } : {}),
               ...(previous?.feature ? { feature: previous.feature } : {}),
+              // Cerrar la puerta de tickets ES comprometerse con ellos, aunque un resume
+              // previo hubiera fijado `ticketsOpted:false`.
+              ...(target.n === 6 ? { ticketsOpted: true } : previous?.ticketsOpted === undefined ? {} : { ticketsOpted: previous.ticketsOpted }),
               ...inheritedAllow,
               active: true,
             })
-            await ctx.session.prompt({ sessionID: input.sessionID, text: phaseBrief(next, previous?.feature) })
+            await reply(ctx.session as never, input.sessionID, phaseBrief(next, previous?.feature))
             return
           }
           case "start": {
@@ -492,17 +509,19 @@ export default Plugin.define({
             const marker = !explicit && !previous ? readFeatureMarker(projectRoot) : undefined
             const feature = explicit ?? previous?.feature ?? marker?.slug ?? provisionalSlug(input.sessionID)
             const provisional = !explicit && !previous?.feature && !marker
-            await writeState(owner, {
+            // Uniforme con resume: si ya hay tickets en disco, se adoptan (lo escrito manda).
+            const ticketsOpted = previous?.ticketsOpted ?? (adoptsTickets({ feature }, projectRoot) ? true : undefined)
+            await commit({
               fase: parsed.fase,
               ...(gate ? { gate } : {}),
               feature,
               ...(provisional ? { slugProvisional: true } : {}),
+              ...(ticketsOpted === undefined ? {} : { ticketsOpted }),
               ...(allow.length > 0 ? { allow } : {}),
               active: true,
             })
             // Punto (e): el marcador en la raíz deja huella en disco para retomar sin storage.
             writeFeatureMarker(projectRoot, feature)
-            await syncStateEntry(ctx.session as never, input.sessionID, { fase: parsed.fase, ...(gate ? { gate } : {}), feature, active: true })
             const offer = marker ? `[flow] he encontrado .flow-feature: retomo "${marker.slug}" (creado ${marker.createdAt}).\n` : ""
             await reply(
               ctx.session as never,
@@ -518,57 +537,61 @@ export default Plugin.define({
           }
           case "next": {
             if (!previous || !previous.active) {
-              await ctx.session.prompt({ sessionID: input.sessionID, text: reminder() })
+              await reply(ctx.session as never, input.sessionID, reminder())
               return
             }
             const next = Math.min(previous.fase + 1, LAST_PHASE)
             const entry = phase(next)
             // Puerta 7: si se pasa por la 6 (o se llega a la 7 viniendo de ella), los
-            // tickets SÍ son requisito: el usuario eligió el camino con tickets.
-            const opted = previous.ticketsOpted ?? previous.fase >= 6
-            await writeState(owner, {
+            // tickets SÍ son requisito: el usuario eligió el camino con tickets. Pero un
+            // `false` explícito (resume en 6/7 sin tickets) se conserva: camino tdd.
+            // El tri-estado evita que un resume/start posterior convierta tdd en compromiso.
+            const opted = nextTicketsOpted(previous, projectRoot)
+            await commit({
               fase: next,
               ...(entry?.gate ? { gate: entry.gate } : {}),
               ...(previous.feature ? { feature: previous.feature } : {}),
               ...(previous.slugProvisional ? { slugProvisional: true } : {}),
-              ...(opted ? { ticketsOpted: true } : {}),
+              ...(opted === undefined ? {} : { ticketsOpted: opted }),
               ...inheritedAllow,
               active: true,
             })
-            await ctx.session.prompt({
-              sessionID: input.sessionID,
-              text:
-                next === previous.fase
-                  ? `${narration(next, entry?.gate ?? "ninguno")}\nYa estás en la fase ${LAST_PHASE}; no hay siguiente.`
-                  : phaseBrief(next, previous.feature),
-            })
+            await reply(
+              ctx.session as never,
+              input.sessionID,
+              next === previous.fase
+                ? `${narration(next, entry?.gate ?? "ninguno")}\nYa estás en la fase ${LAST_PHASE}; no hay siguiente.`
+                : phaseBrief(next, previous.feature),
+            )
             return
           }
           case "back": {
             if (!previous || !previous.active) {
-              await ctx.session.prompt({ sessionID: input.sessionID, text: reminder() })
+              await reply(ctx.session as never, input.sessionID, reminder())
               return
             }
             const target = Math.max(FIRST_PHASE, previous.fase - parsed.steps)
             const entry = phase(target)
             // Punto 4: retroceder también es un nuevo punto de partida: se recalcula la foto.
-            await writeState(owner, {
+            const allow = snapshotAllow(projectRoot)
+            await commit({
               fase: target,
               ...(entry?.gate ? { gate: entry.gate } : {}),
               ...(previous.feature ? { feature: previous.feature } : {}),
               ...(previous.slugProvisional ? { slugProvisional: true } : {}),
-              ...(snapshotAllow(projectRoot).length > 0 ? { allow: snapshotAllow(projectRoot) } : {}),
+              allow,
               active: true,
             })
-            await ctx.session.prompt({
-              sessionID: input.sessionID,
-              text: `${narration(target, entry?.gate ?? "ninguno")}\n${phaseBrief(target, previous.feature)}\n\nAVISO: retroceder reabre el gate y sus artefactos. No borra lo escrito.`,
-            })
+            await reply(
+              ctx.session as never,
+              input.sessionID,
+              `${narration(target, entry?.gate ?? "ninguno")}\n${phaseBrief(target, previous.feature)}\n\nAVISO: retroceder reabre el gate y sus artefactos. No borra lo escrito.`,
+            )
             return
           }
           case "rename": {
             if (!previous || !previous.active) {
-              await ctx.session.prompt({ sessionID: input.sessionID, text: reminder() })
+              await reply(ctx.session as never, input.sessionID, reminder())
               return
             }
             const oldFeature = previous.feature
@@ -592,20 +615,22 @@ export default Plugin.define({
                 }
               }
             }
-            await writeState(owner, {
+            await commit({
               fase: previous.fase,
               ...(previous.gate ? { gate: previous.gate } : {}),
               feature: newFeature,
+              ...(previous.slugProvisional ? { slugProvisional: true } : {}),
+              ...(previous.ticketsOpted === undefined ? {} : { ticketsOpted: previous.ticketsOpted }),
               ...inheritedAllow,
               active: true,
             })
-            await ctx.session.prompt({
-              sessionID: input.sessionID,
-              text:
-                `[flow] feature renombrada: ${oldFeature ?? "(ninguna)"} → ${newFeature}` +
+            await reply(
+              ctx.session as never,
+              input.sessionID,
+              `[flow] feature renombrada: ${oldFeature ?? "(ninguna)"} → ${newFeature}` +
                 (moved ? ` · movido .scratch/${oldFeature}/` : "") +
                 (conflict ? ` · AVISO: .scratch/${newFeature}/ ya existía, no he movido nada` : ""),
-            })
+            )
             return
           }
           case "resume": {
@@ -614,25 +639,46 @@ export default Plugin.define({
             const marker = parsed.feature ? undefined : readFeatureMarker(projectRoot)
             const feature = parsed.feature ?? previous?.feature ?? marker?.slug ?? provisionalSlug(input.sessionID)
             const provisional = !parsed.feature && !previous?.feature && !marker
-            const fase = previous?.fase ?? (feature ? deducePhase(projectRoot, feature) : FIRST_PHASE)
+            // Estado en storage MANDA sobre la deducción: si hay estado, su fase es la última
+            // decisión explícita del usuario (next/back/gate), no una conjetura por artefactos.
+            // Sólo sin estado se deduce, y entonces se dice qué se dedujo y por qué.
+            const deduction = deducePhaseInfo(projectRoot, feature)
+            const fromState = previous?.fase !== undefined
+            const fase = previous?.fase ?? (feature ? deduction.fase : FIRST_PHASE)
+            const why = fromState
+              ? `fase ${fase} del estado guardado en la sesión (el disco no la reemplaza); si no era la esperada, corrige con /flow back`
+              : `fase ${fase} deducida de ${deduction.reason}; si ese artefacto era un borrador aún no aprobado, corrige con /flow back`
             const entry = phase(fase)
             // Punto 4: el resume es un NUEVO punto de partida, así que la foto se recalcula.
             // Si se reutilizara `previous.allow`, un flow retomado tras crear CONTEXT.md
             // arrastraría una foto vieja y el gate quedaría cerrado sin motivo.
             const allow = snapshotAllow(projectRoot)
-            await writeState(owner, {
+            // Puerta 7: `false` explícito significa "retomé ya en 6/7 sin tickets: camino tdd".
+            // Así un `/flow next` posterior desde la 6 deducida no promete tickets inexistentes.
+            // Retomar por debajo de la 6 no fija nada: dejar 6→7 sigue siendo el camino con tickets.
+            const ticketsOpted = resumeTicketsOpted(
+              { fase, feature, ...(previous?.ticketsOpted === undefined ? {} : { ticketsOpted: previous.ticketsOpted }) },
+              projectRoot,
+              Boolean(previous),
+            )
+            await commit({
               fase,
               ...(entry?.gate ? { gate: entry.gate } : {}),
               feature,
-              ...(provisional ? { slugProvisional: true } : {}),
-              ...(allow.length > 0 ? { allow } : {}),
+              ...(provisional || previous?.slugProvisional ? { slugProvisional: true } : {}),
+              ...(ticketsOpted === undefined ? {} : { ticketsOpted }),
+              allow,
               active: true,
             })
             writeFeatureMarker(projectRoot, feature)
             await reply(
               ctx.session as never,
               input.sessionID,
-              `${marker && !parsed.feature && !previous?.feature ? `[flow] retomo la feature marcada: ${feature} (fase ${fase} deducida de los artefactos)\n` : ""}[flow] reactivado en fase ${fase} · feature ${feature}\n${phaseBrief(fase, feature)}`,
+              `${marker && !parsed.feature && !previous?.feature ? `[flow] retomo la feature marcada: ${feature} (fase ${fase} deducida de los artefactos)\n` : ""}` +
+                `[flow] reactivado en fase ${fase} · feature ${feature}\n` +
+                `[flow] por qué: ${why}` +
+                `\n` +
+                `${phaseBrief(fase, feature)}`,
             )
             return
           }
@@ -739,6 +785,7 @@ export default Plugin.define({
               fase: state.fase,
               ...(state.feature ? { feature: state.feature } : {}),
               ...(state.allow ? { allow: state.allow } : {}),
+              ...(state.ticketsOpted === true ? { ticketsOpted: true } : {}),
             },
             target,
           )

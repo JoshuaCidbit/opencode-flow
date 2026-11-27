@@ -179,16 +179,18 @@ export function verdictFor(options: GateOptions, target: WriteTarget): GateVerdi
 
   const allPermitted = targets.every(permitted)
 
-  // Fase >= 7: código del proyecto exige spec. Los tickets sólo si el usuario pasó por la
-  // fase 6 (o los declaró): flow.md admite implementar con `tdd` sin tickets, y exigirlos
-  // sería inventar una fase que no se recorrió. Ver committedTickets().
+  // Fase >= 7: código del proyecto exige spec. Los tickets sólo si hubo compromiso
+  // (`ticketsOpted`): recorrer la 6, cerrar `/flow gate tickets` o tenerlos en disco.
+  // flow.md admite `tdd` sin tickets; exigirlos sin compromiso inventaría una fase que
+  // no se recorrió. Ver ticketsReady().
   if (options.fase >= 7) {
     const specReady = satisfied(5, feature, options.projectRoot)
-    const ticketsReady = committedTickets(options)
-    if (specReady && ticketsReady) return { allow: true, reason: "spec presente: escritura del proyecto permitida" }
+    const ticketsOk = ticketsReady(options)
+    if (specReady && ticketsOk) return { allow: true, reason: "spec presente: escritura del proyecto permitida" }
     // Aún sin spec: deja escribir dentro de .scratch/ para que se pueda crear el artefacto.
     if (allPermitted) return { allow: true, reason: "escritura dentro de .scratch/ antes de cerrar el gate" }
-    const falta = `${specReady ? "" : "spec"}${!specReady && !ticketsReady ? " y tickets" : ""}`.trim()
+    // Si falta sólo uno, nombrarlo; un mensaje con "exige ;" era ilegible y ocultaba el motivo.
+    const falta = [!specReady ? "spec" : "", !ticketsOk ? "tickets" : ""].filter(Boolean).join(" y ")
     return refuse(`fase ${entry.n} (${entry.name}) exige ${falta}; escríbelo en .scratch/${feature}/`)
   }
 
@@ -260,14 +262,56 @@ export function writeTarget(tool: string, input: unknown, base: string): WriteTa
 }
 
 /**
- * ¿Hay que exigir tickets en la fase 7? Sólo si el usuario se comprometió con ellos:
- * o bien pasó por la fase 6 (hay tickets en disco), o bien lo declaró (`ticketsOpted`).
- * Si fue por `tdd` sin fase 6, no: flow.md permite ese camino.
+ * ¿El usuario adoptó el camino con tickets? Se adopta si ya lo declaró (`ticketsOpted`)
+ * o si los tickets existen en disco. NO por estar en la fase 6: un `/flow resume` puede
+ * retomar en 6/7 sin tickets y entonces va por `tdd` (flow.md). La usan `/flow next` y
+ * `/flow resume`; el gate usa `ticketsReady`, que es "sin compromiso o tickets presentes".
  */
-// Sin compromiso declarado, la fase 7 no inventa la obligación de tickets: flow.md admite
-// implementar con `tdd` sin pasar por la fase 6. Sólo con `ticketsOpted === true` (el
-// usuario pasó por la 6 o lo declaró) los tickets son requisito para escribir código.
-function committedTickets(options: GateOptions): boolean {
+export function adoptsTickets(
+  state: { ticketsOpted?: boolean; feature?: string },
+  root: string,
+): boolean {
+  // Lo escrito manda: si hay tickets en disco, hubo compromiso aunque el estado diga `false`.
+  if (satisfied(6, state.feature, root)) return true
+  return state.ticketsOpted === true
+}
+
+/**
+ * Valor de `ticketsOpted` tras `/flow next`: tri-estado.
+ * - tickets en disco -> `true` (lo escrito manda, incluso sobre un `false`);
+ * - `false` explícito se conserva (retomamos por `tdd`);
+ * - `true` explícito, o estar en la 6 recorrida -> `true`;
+ * - resto -> `undefined` (sin opinión: dejar 6→7 sigue siendo el camino con tickets).
+ */
+export function nextTicketsOpted(
+  state: { fase: number; ticketsOpted?: boolean; feature?: string },
+  root: string,
+): boolean | undefined {
+  if (adoptsTickets(state, root)) return true
+  if (state.ticketsOpted === false) return false
+  if (state.ticketsOpted === true || state.fase >= 6) return true
+  return undefined
+}
+
+/**
+ * Valor de `ticketsOpted` tras `/flow resume`: hereda el flag si existía; si no, adopta
+ * tickets en disco; si no, y la fase deducida ya es 6+, fija `false` (camino `tdd`) para
+ * que un `/flow next` posterior no prometa tickets inexistentes.
+ */
+export function resumeTicketsOpted(
+  state: { fase: number; ticketsOpted?: boolean; feature?: string },
+  root: string,
+  hadState: boolean,
+): boolean | undefined {
+  if (adoptsTickets(state, root)) return true
+  if (state.ticketsOpted !== undefined) return state.ticketsOpted
+  // Sin estado previo y ya en 6+: se retomó sin recorrer la 6, así que es camino tdd.
+  return !hadState && state.fase >= 6 ? false : undefined
+}
+
+// Con compromiso (`ticketsOpted:true`), los tickets pasan a ser requisito para escribir
+// código; sin compromiso, la fase 7 sólo exige spec (camino `tdd` de flow.md).
+function ticketsReady(options: GateOptions): boolean {
   return options.ticketsOpted !== true || satisfied(6, options.feature, options.projectRoot)
 }
 
@@ -310,5 +354,3 @@ export function gateRequirement(
   }
   return `gate de escritura: whitelist .scratch/${feature}/` + (fase === 4 ? " + proto" : "") + (fase === 2 || fase === 3 ? " (+ CONTEXT.md/docs/adr si existían al start)" : "")
 }
-
-export const gateVersion = 2

@@ -103,3 +103,17 @@ test("regla 4: commitAdvance nunca lanza", async () => {
   }
   await assert.doesNotReject(() => commitAdvance(broken, "o", state(), state({ fase: 5 })))
 })
+
+// Punto 2: el auto-avance que entra en la 7 con tickets adopta el compromiso,
+// igual que `/flow next` desde la 6. Si no, el gate no sabría que hay tickets.
+test("2: auto-avance a la 7 adopta ticketsOpted cuando la 6 está satisfecha", () => {
+  const next = advance(state({ fase: 6 }), (fase) => fase === 6, 10)
+  assert.equal(next?.fase, 7)
+  assert.equal(next?.ticketsOpted, true)
+})
+
+test("2: si el artefacto que avanzó no es la 6, no inventa compromiso", () => {
+  const next = advance(state({ fase: 4 }), (fase) => fase === 4, 10)
+  assert.equal(next?.fase, 5)
+  assert.equal(next?.ticketsOpted, undefined)
+})

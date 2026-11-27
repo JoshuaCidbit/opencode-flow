@@ -23,6 +23,10 @@ test("isState: reconoce estado válido y rechaza basura", () => {
   assert.ok(!isState({ active: true }))
   assert.ok(!isState(null))
   assert.ok(!isState("x"))
+  // Puerta 7: el compromiso es booleano; `false` explícito es válido (camino tdd).
+  assert.ok(isState({ fase: 7, active: true, ticketsOpted: false }))
+  assert.ok(!isState({ fase: 7, active: true, ticketsOpted: "si" }))
+  assert.ok(!isState({ fase: 7, active: true, slugProvisional: "si" }))
 })
 
 test("stateKey: prefijo por sesión", () => {
