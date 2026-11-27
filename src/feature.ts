@@ -3,14 +3,14 @@
 // Para qué sirve: al retomar una sesión, el estado puede no estar en storage
 // (sesión nueva, compactación, otro arranque). El marcador es la única huella en
 // disco de que YA había un flow en marcha, y permite:
-//   - deducir la fase por artefactos (spec -> 7, tickets -> 7),
+//   - deducir la fase por artefactos (ver DEDUCIBLE abajo),
 //   - ofrecer retomar esa feature concreta.
 //
 // Reglas: nunca lanza. Un marcador corrupto es lo mismo que no tener marcador.
 
 import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { satisfied } from "./gate.ts"
+import { isNonEmptyFile, satisfied } from "./gate.ts"
 
 export const FEATURE_MARKER = ".flow-feature"
 
@@ -18,6 +18,24 @@ export type FeatureMarker = {
   readonly slug: string
   readonly createdAt: string
 }
+
+/**
+ * Artefactos que CIERRAN las fases 1-4 y NO tienen gate (no hay nada que verificar en
+ * escritura), así que no aparecen en `phases.ts`. Se usan SÓLO para deducir dónde retomar.
+ *
+ * `fase` es la fase en la que se retoma si el artefacto existe: cerrar la 1 deja en la 2.
+ * - understanding.md → la 1 (Entender) está cerrada → 2.
+ * - glossary.md / GLOSSARY.md / CONTEXT.md → la 2 (Vocabulario) cerrada → 3.
+ * - design.md → la 3 (Diseño) cerrada → 4 (Sondear). Si además hay spec.md, la 5 está
+ *   cerrada y el cálculo sube a 6; por eso "design.md → 4/5" se resuelve por precedencia.
+ *
+ * Cada nombre se busca en `.scratch/<feature>/` y en la raíz del proyecto.
+ */
+const DEDUCIBLE: ReadonlyArray<{ fase: number; names: readonly string[] }> = [
+  { fase: 2, names: ["understanding.md"] },
+  { fase: 3, names: ["glossary.md", "GLOSSARY.md", "CONTEXT.md"] },
+  { fase: 4, names: ["design.md"] },
+]
 
 export function readFeatureMarker(projectRoot: string): FeatureMarker | undefined {
   try {
@@ -43,16 +61,43 @@ export function writeFeatureMarker(projectRoot: string, slug: string): FeatureMa
   return marker
 }
 
-/**
- * Fase más alta ya ganada por los artefactos en disco, o 1 si no hay nada.
- * Sólo sube por evidencia real: delega en `satisfied()`, la MISMA función que usa el
- * gate, para no tener dos definiciones distintas de "artefacto presente".
- */
-export function deducePhase(projectRoot: string, feature: string): number {
-  let deduced = 1
-  for (let n = 1; n <= 10; n++) {
-    if (!satisfied(n, feature, projectRoot)) continue
-    deduced = Math.max(deduced, n + 1)
+export type Deduction = {
+  /** Fase en la que retomar. */
+  readonly fase: number
+  /** Por qué: nombre del artefacto encontrado; si no hay ninguno, se dice que no hay. */
+  readonly reason: string
+}
+
+/** Primer nombre presente de `names`, con su ruta relativa como razón. Nunca lanza.
+ *  Misma regla que el gate (`isNonEmptyFile`): un archivo vacío no es evidencia de trabajo. */
+function presentName(projectRoot: string, feature: string, names: readonly string[]): string | undefined {
+  for (const name of names) {
+    const inFeature = join(".scratch", feature, name)
+    if (isNonEmptyFile(join(projectRoot, inFeature))) return inFeature
+    if (isNonEmptyFile(join(projectRoot, name))) return name
   }
-  return Math.min(deduced, 10)
+  return undefined
+}
+
+/**
+ * Fase en la que retomar y POR QUÉ. Sin el por qué, una fase deducida parece adivinada:
+ * quien retoma necesita saber qué artefacto la sostiene para juzgar si `/flow back` debe
+ * corregirla (un borrador no aprobado sigue contando como artefacto en disco).
+ */
+export function deducePhaseInfo(projectRoot: string, feature: string): Deduction {
+  let best: Deduction = { fase: 1, reason: "ningún artefacto en disco" }
+  for (const mark of DEDUCIBLE) {
+    const name = presentName(projectRoot, feature, mark.names)
+    if (name && mark.fase > best.fase) best = { fase: mark.fase, reason: name }
+  }
+  for (let n = 5; n <= 6; n++) {
+    if (satisfied(n, feature, projectRoot) && n + 1 > best.fase) {
+      best = { fase: n + 1, reason: n === 5 ? `spec de .scratch/${feature}/` : `tickets en .scratch/${feature}/issues/` }
+    }
+  }
+  return { fase: Math.min(best.fase, 10), reason: best.reason }
+}
+
+export function deducePhase(projectRoot: string, feature: string): number {
+  return deducePhaseInfo(projectRoot, feature).fase
 }
