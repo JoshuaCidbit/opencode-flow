@@ -60,7 +60,7 @@ export function phaseSections(contract: string): PhaseSection[] {
       const heading = body.match(PHASE_HEADING)?.[2]?.trim() ?? ""
       const value = (name: string): string | undefined => {
         const raw = field(body, name)
-        if (!raw || /^(ninguno|ninguna|—|-|n\/a)$/i.test(raw)) return undefined
+        if (!raw || /^(ninguno|ninguna|ningún|—|-|n\/a|no aplica)$/i.test(raw)) return undefined
         return raw
       }
       return {

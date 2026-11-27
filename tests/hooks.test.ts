@@ -36,6 +36,10 @@ export type Harness = {
   state(sessionID: string): FlowState | undefined
   /** Dispara el hook `context` y devuelve `event.system` (lo que el modelo recibe). */
   context(sessionID: string): Promise<string | undefined>
+  /** Dispara el hook `generate` y devuelve `event.system`. */
+  generate(sessionID: string): Promise<string | undefined>
+  /** Dispara el hook `compaction` y devuelve `event.system`. */
+  compaction(sessionID: string, messages?: unknown[]): Promise<string | undefined>
   /** Entradas `opencode-flow.*` en instructions, en el orden en que se pusieron/borraron. */
   readonly entries: Map<string, unknown>
   /** Conteo de escrituras en instructions (`entry.put`). */
@@ -151,17 +155,20 @@ export async function harness(initial?: {
 
   // Mismo cableado que el runtime: el hook recibe `event` y lo que ve el modelo es
   // `event.system`. Sin esta función no se puede comprobar QUÉ recibe el modelo.
-  const context = async (sessionID: string) => {
-    const list = sessionHooks.get("context") ?? []
-    assert.ok(list.length > 0, "el plugin no registró el hook context")
-    // El runtime entrega `event.system` como ARRAY de partes (medido en 2.4.2): si aquí
-    // fuera un string, el plugin se callaría y el test daría verde sin inyectar nada.
+  // El runtime entrega `system` como ARRAY de partes (medido en 2.4.2): si aquí fuera un
+  // string, el plugin se callaría y el test daría verde sin inyectar nada.
+  const fire = async (kind: string, extra: Record<string, unknown> = {}) => {
+    const list = sessionHooks.get(kind) ?? []
+    assert.ok(list.length > 0, `el plugin no registró el hook ${kind}`)
     const system: Array<{ type?: string; text?: string }> = []
-    const event = { sessionID, system }
+    const event = { sessionID: extra.sessionID ?? "s1", system, ...extra }
     for (const hook of list) await hook(event)
     const text = system.map((part) => (typeof part?.text === "string" ? part.text : "")).join("\n")
     return text.length > 0 ? text : undefined
   }
+  const context = (sessionID: string) => fire("context", { sessionID })
+  const generate = (sessionID: string) => fire("generate", { sessionID })
+  const compaction = (sessionID: string, messages: unknown[] = []) => fire("compaction", { sessionID, messages })
 
   return {
     root,
@@ -171,6 +178,8 @@ export async function harness(initial?: {
     run,
     write,
     context,
+    generate,
+    compaction,
     state: (id) => map.get(`flow:${id}`) as FlowState | undefined,
     writes: () => entryPuts.length,
   }
@@ -315,4 +324,30 @@ test("P1 (cableado): en fase 1 el contrato inyectado lleva el slug concreto y la
   assert.ok(!injected.includes("<feature>"), "sin placeholders de ruta sin resolver")
   assert.match(injected, /una pregunta por turno/i, "la regla de una pregunta por turno llega al modelo")
   assert.match(injected, /Sondear|grilling|Explora antes de preguntar/)
+})
+
+// P1: `push()` es el ÚNICO punto de salida de texto al modelo (src/index.ts:323-331), así que
+// basta comprobar cada hook que lo usa. `context` y `generate` comparten el mismo bucle, por
+// eso ambos resuelven `<feature>`; `compaction` inyecta el addendum por la misma función.
+for (const kind of ["context", "generate"] as const) {
+  test(`P1 (cableado): el hook ${kind} resuelve <feature> en fase 1`, async () => {
+    const root = mkdtempSync(join(tmpdir(), `flow-hook-${kind}-`))
+    const h = await harness({ root })
+    await h.run("s1", "start 1 abc")
+    const injected = kind === "context" ? await h.context("s1") : await h.generate("s1")
+    assert.ok(injected, `el hook ${kind} no inyectó nada`)
+    assert.ok(injected.includes(".scratch/abc/understanding.md"), `${kind}: la ruta no lleva el slug`)
+    assert.ok(!injected.includes("<feature>"), `${kind}: queda un placeholder <feature> literal`)
+  })
+}
+
+test("P1 (cableado): compaction inyecta el addendum con la fase y la feature reales", async () => {
+  const root = mkdtempSync(join(tmpdir(), "flow-hook-compaction-"))
+  const h = await harness({ root })
+  await h.run("s1", "start 3 abc")
+  const injected = await h.compaction("s1")
+  assert.ok(injected, "el hook compaction no inyectó nada")
+  assert.match(injected, /fase 3/)
+  assert.match(injected, /Feature: abc/)
+  assert.ok(!injected.includes("<feature>"), "compaction: queda un placeholder <feature> literal")
 })

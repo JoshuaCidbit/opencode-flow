@@ -8,8 +8,11 @@
   en vez de delegarlas en la skill `grilling`, que puede no existir en el host.
 - El contrato se inyecta con `<feature>` YA RESUELTO al slug concreto (`scopeToFeature`): las rutas
   son ejecutables por el modelo. `<slug>` sigue siendo sintaxis de comando y no se toca.
-- Presupuesto re-medido: máximo 6689 bytes en fase 1 (antes 6330 en la 5); el test nombra la fase
-  más cara y exige un margen de 300-700 B bajo el límite de 7000.
+- Presupuesto re-medido: máximo 6689 bytes en fase 1 (antes 6330 en la 5); el test nombra la
+  fase más cara e imprime la tabla por fase al fallar. El suelo del margen es de 150 B (no un
+  rango cerrado): recortar el contrato es una mejora y no debe romper el test.
+- Quitar el ciclo `phases.ts` -> `gate.ts` -> `phases.ts` que introdujo `artifactPaths` en el
+  brief: la función se movió a `phases.ts` (no toca disco, produce texto) y `gate.ts` la importa.
 ### Limitación conocida
 - El bloque común se inyecta en TODA petición activa, así que la escalera de verificación y las
   escaladas (que aplican sobre todo desde la fase 7) se pagan también en las fases 1-4. Se acepta

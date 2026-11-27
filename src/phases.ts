@@ -1,7 +1,6 @@
 // Single source of truth for the phase map. `flow.md` stays prose and is updated by hand.
 import { isValidSlug, slugify } from "./slug.ts"
 import { scopeToFeature } from "./contract.ts"
-import { artifactPaths } from "./gate.ts"
 //
 // Rule: phase numbers here must match the table in `flow.md`. Nothing else reads the prose.
 
@@ -220,6 +219,21 @@ export function badGateMessage(name: string): string {
 
 export function phaseMap(): string {
   return PHASES.map(summaryLine).join("\n")
+}
+
+/**
+ * Resolve the artifact the active gate demands. Vive aquí (y no en `gate.ts`) porque no toca
+ * disco y produce TEXTO para el modelo; `gate.ts` la importa para decidir. Si viviera en
+ * `gate.ts`, `phases.ts` tendría que importarlo y cerraríamos un ciclo.
+ * `undefined` means "no artifact to check": either there is no phase, or no feature was declared.
+ */
+export function artifactPaths(feature: string | undefined, entry: Phase | undefined): string[] | undefined {
+  const spec = entry?.artifact?.(feature ?? "")
+  if (!feature || !spec) return undefined
+  const names: string[] = []
+  if (spec.file) names.push(spec.file)
+  if (spec.dir) names.push(spec.dir)
+  return names.length > 0 ? names : undefined
 }
 
 /**

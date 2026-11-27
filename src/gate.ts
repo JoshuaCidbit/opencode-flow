@@ -10,7 +10,7 @@
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs"
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { tmpdir } from "node:os"
-import { phase } from "./phases.ts"
+import { artifactPaths, phase } from "./phases.ts"
 
 export type GateVerdict =
   | { allow: true; reason: string }
@@ -40,18 +40,6 @@ function blocking(entry: ReturnType<typeof phase>): boolean {
   return Boolean(entry?.blocks && entry.artifact)
 }
 
-/**
- * Resolve the artifact the active gate demands.
- * `undefined` means "no artifact to check": either there is no phase, or no feature was declared.
- */
-export function artifactPaths(feature: string | undefined, entry: ReturnType<typeof phase>): string[] | undefined {
-  const spec = entry?.artifact?.(feature ?? "")
-  if (!feature || !spec) return undefined
-  const names: string[] = []
-  if (spec.file) names.push(spec.file)
-  if (spec.dir) names.push(spec.dir)
-  return names.length > 0 ? names : undefined
-}
 
 function resolveAgainst(base: string, candidate: string): string {
   return isAbsolute(candidate) ? candidate : resolve(base, candidate)
