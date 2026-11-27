@@ -1,4 +1,5 @@
 // Single source of truth for the phase map. `flow.md` stays prose and is updated by hand.
+import { isValidSlug, slugify } from "./slug.ts"
 //
 // Rule: phase numbers here must match the table in `flow.md`. Nothing else reads the prose.
 
@@ -97,6 +98,10 @@ export type Parsed =
   | { kind: "gate"; gate: GateName }
   | { kind: "bad-gate"; name: string }
   | { kind: "off" }
+  | { kind: "next" }
+  | { kind: "back"; steps: number }
+  | { kind: "rename"; feature: string }
+  | { kind: "resume"; feature?: string }
 
 function toPhase(raw: string): PhaseNumber | undefined {
   if (!/^\d+$/.test(raw)) return undefined
@@ -133,18 +138,41 @@ export function parseCommand(text: string): Parsed {
     if (n === undefined) return { kind: "help", reason: `"${rest[0]}" no es una fase entre ${FIRST_PHASE} y ${LAST_PHASE}` }
     const slug = rest[1]
     if (slug === undefined) return { kind: "start", fase: n }
-    // A10: el slug se valida antes de tocar disco. Nada de `.`, `..`, `/` ni `\`: son
-    // escapes de ruta, no nombres de feature.
-    if (!/^[a-z0-9-]{1,40}$/.test(slug)) {
-      return {
-        kind: "help",
-        reason: `slug "${slug}" inválido: usa minúsculas, dígitos y guiones (1-40), sin . / \\`,
-      }
-    }
+    if (!isValidSlug(slug)) return { kind: "help", reason: `slug "${slug}" inválido: usa minúsculas, dígitos y guiones (1-40), sin . / \\` }
     return { kind: "start", fase: n, feature: slug }
   }
 
-  return { kind: "help", reason: `subcomando desconocido "${head}"` }
+  if (sub === "next") return { kind: "next" }
+
+  if (sub === "back") {
+    if (rest.length === 0) return { kind: "back", steps: 1 }
+    if (!/^\d+$/.test(rest[0])) return { kind: "help", reason: `"${rest[0]}" no es un número de fases` }
+    const steps = Number(rest[0])
+    if (steps < 1 || steps > LAST_PHASE - FIRST_PHASE) return { kind: "help", reason: `no puedo retroceder ${steps} fases` }
+    return { kind: "back", steps }
+  }
+
+  if (sub === "rename") {
+    const slug = rest[0]
+    if (!slug) return { kind: "help", reason: "falta el slug nuevo: /flow rename <slug>" }
+    if (!isValidSlug(slug)) return { kind: "help", reason: `slug "${slug}" inválido: usa minúsculas, dígitos y guiones (1-40), sin . / \\` }
+    return { kind: "rename", feature: slug }
+  }
+
+  if (sub === "resume") {
+    const slug = rest[0]
+    if (slug === undefined) return { kind: "resume" }
+    if (!isValidSlug(slug)) return { kind: "help", reason: `slug "${slug}" inválido: usa minúsculas, dígitos y guiones (1-40), sin . / \\` }
+    return { kind: "resume", feature: slug }
+  }
+
+  // C1: `/flow <descripción>` arranca con un slug derivado del texto. Sin argumentos
+  // (`/flow`), index.ts usa el slug provisional del sessionID.
+  const feature = slugify(text)
+  if (!feature) {
+    return { kind: "help", reason: `subcomando desconocido "${head}"; si era una descripción, no pude derivar un slug de ella` }
+  }
+  return { kind: "start", fase: FIRST_PHASE, feature }
 }
 
 // ---- rendered output -------------------------------------------------------
@@ -156,8 +184,13 @@ function summaryLine(entry: Phase): string {
 export function help(): string {
   return [
     "Uso: /flow <subcomando>",
-    "  (sin argumentos)      arranca en fase 1",
+    "  (sin argumentos)      arranca en fase 1 con slug provisional (`flow-<sesión>`)",
+    "  <descripción>         arranca en fase 1 con el slug derivado del texto",
     "  start [N] [slug]      arranca/continúa en fase N; `slug` nombra la feature (activa el gate)",
+    "  next                  avanza a la fase siguiente",
+    "  back [N]              retrocede N fases (por defecto 1); reabre artefactos",
+    "  rename <slug>         renombra la feature (mueve .scratch/<slug>/ si existe)",
+    "  resume [slug]         reactiva el flow parado; opcionalmente adopta otro slug",
     "  status                fase, gate pendiente, si hay spec y si está activo",
     "  gate <nombre>         cierra el gate y avanza de fase",
     "  off                   desactiva el flow para esta sesión",

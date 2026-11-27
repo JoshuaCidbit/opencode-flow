@@ -1,9 +1,10 @@
 import { readFile } from "node:fs/promises"
-import { existsSync, readFileSync, readdirSync } from "node:fs"
+import { existsSync, readFileSync, readdirSync, renameSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { Plugin } from "@opencode/plugin"
 import {
+  FIRST_PHASE,
   LAST_PHASE,
   badGateMessage,
   help,
@@ -27,6 +28,7 @@ import {
 import { makeLogger, OnceLog } from "./log.ts"
 import { decide, WRITING_TOOLS } from "./gate-decision.ts"
 import { renderFor } from "./contract.ts"
+import { provisionalSlug } from "./slug.ts"
 
 const LOG_PREFIX = "[opencode-flow]"
 
@@ -394,10 +396,16 @@ export default Plugin.define({
             // Gate B: se congela lo que EXISTÍA ahora. Si se crea CONTEXT.md después,
             // no se cuela: el gate no se abre a posteriori.
             const allow = ["CONTEXT.md", "docs/adr"].filter((name) => existsSync(join(projectRoot, name)))
+            // C1: sin slug explícito se usa el provisional del sessionID. Así el gate
+            // funciona desde el primer turno sin obligar a bautizar la feature.
+            const explicit = parsed.feature
+            const feature = explicit ?? previous?.feature ?? provisionalSlug(input.sessionID)
+            const provisional = !explicit && (previous?.slugProvisional ?? !previous?.feature)
             await writeState(owner, {
               fase: parsed.fase,
               ...(gate ? { gate } : {}),
-              ...(parsed.feature ?? previous?.feature ? { feature: parsed.feature ?? previous?.feature } : {}),
+              feature,
+              ...(provisional ? { slugProvisional: true } : {}),
               ...(allow.length > 0 ? { allow } : {}),
               active: true,
             })
@@ -407,8 +415,117 @@ export default Plugin.define({
               // acto explícito (/flow start). Si el runtime no permite el hook, el flow
               // sólo guía: no debe fingir que bloquea.
               text: gateAvailable
-                ? phaseBrief(parsed.fase, parsed.feature ?? previous?.feature)
-                : `${phaseBrief(parsed.fase, parsed.feature ?? previous?.feature)}\n\nAVISO: gate de escritura no disponible en este runtime: el flow solo guía, no bloquea.`,
+                ? phaseBrief(parsed.fase, feature)
+                : `${phaseBrief(parsed.fase, feature)}\n\nAVISO: gate de escritura no disponible en este runtime: el flow solo guía, no bloquea.`,
+            })
+            return
+          }
+          case "next": {
+            if (!previous || !previous.active) {
+              await ctx.session.prompt({ sessionID: input.sessionID, text: reminder() })
+              return
+            }
+            const next = Math.min(previous.fase + 1, LAST_PHASE)
+            const entry = phase(next)
+            await writeState(owner, {
+              fase: next,
+              ...(entry?.gate ? { gate: entry.gate } : {}),
+              ...(previous.feature ? { feature: previous.feature } : {}),
+              ...(previous.slugProvisional ? { slugProvisional: true } : {}),
+              ...inheritedAllow,
+              active: true,
+            })
+            await ctx.session.prompt({
+              sessionID: input.sessionID,
+              text:
+                next === previous.fase
+                  ? `${narration(next, entry?.gate ?? "ninguno")}\nYa estás en la fase ${LAST_PHASE}; no hay siguiente.`
+                  : phaseBrief(next, previous.feature),
+            })
+            return
+          }
+          case "back": {
+            if (!previous || !previous.active) {
+              await ctx.session.prompt({ sessionID: input.sessionID, text: reminder() })
+              return
+            }
+            const target = Math.max(FIRST_PHASE, previous.fase - parsed.steps)
+            const entry = phase(target)
+            await writeState(owner, {
+              fase: target,
+              ...(entry?.gate ? { gate: entry.gate } : {}),
+              ...(previous.feature ? { feature: previous.feature } : {}),
+              ...(previous.slugProvisional ? { slugProvisional: true } : {}),
+              ...inheritedAllow,
+              active: true,
+            })
+            await ctx.session.prompt({
+              sessionID: input.sessionID,
+              text: `${narration(target, entry?.gate ?? "ninguno")}\n${phaseBrief(target, previous.feature)}\n\nAVISO: retroceder reabre el gate y sus artefactos. No borra lo escrito.`,
+            })
+            return
+          }
+          case "rename": {
+            if (!previous || !previous.active) {
+              await ctx.session.prompt({ sessionID: input.sessionID, text: reminder() })
+              return
+            }
+            const oldFeature = previous.feature
+            const newFeature = parsed.feature
+            // C1: si el slug era provisional, mover los artefactos ya escritos. Nunca
+            // pisa un destino existente: avisa y deja las cosas donde están.
+            let moved = false
+            let conflict = false
+            if (oldFeature && oldFeature !== newFeature) {
+              const from = join(projectRoot, ".scratch", oldFeature)
+              const to = join(projectRoot, ".scratch", newFeature)
+              if (existsSync(from)) {
+                if (existsSync(to)) conflict = true
+                else {
+                  try {
+                    renameSync(from, to)
+                    moved = true
+                  } catch (error) {
+                    log.once("rename", `no pude mover .scratch/${oldFeature}: ${String(error)}`)
+                  }
+                }
+              }
+            }
+            await writeState(owner, {
+              fase: previous.fase,
+              ...(previous.gate ? { gate: previous.gate } : {}),
+              feature: newFeature,
+              ...inheritedAllow,
+              active: true,
+            })
+            await ctx.session.prompt({
+              sessionID: input.sessionID,
+              text:
+                `[flow] feature renombrada: ${oldFeature ?? "(ninguna)"} → ${newFeature}` +
+                (moved ? ` · movido .scratch/${oldFeature}/` : "") +
+                (conflict ? ` · AVISO: .scratch/${newFeature}/ ya existía, no he movido nada` : ""),
+            })
+            return
+          }
+          case "resume": {
+            const feature = parsed.feature ?? previous?.feature ?? provisionalSlug(input.sessionID)
+            const provisional = !parsed.feature && (previous?.slugProvisional ?? !previous?.feature)
+            const fase = previous?.fase ?? FIRST_PHASE
+            const entry = phase(fase)
+            const allow =
+              previous?.allow ??
+              ["CONTEXT.md", "docs/adr"].filter((name) => existsSync(join(projectRoot, name)))
+            await writeState(owner, {
+              fase,
+              ...(entry?.gate ? { gate: entry.gate } : {}),
+              feature,
+              ...(provisional ? { slugProvisional: true } : {}),
+              ...(allow.length > 0 ? { allow } : {}),
+              active: true,
+            })
+            await ctx.session.prompt({
+              sessionID: input.sessionID,
+              text: `[flow] reactivado en fase ${fase} · feature ${feature}\n${phaseBrief(fase, feature)}`,
             })
             return
           }

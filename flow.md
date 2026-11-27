@@ -109,11 +109,15 @@ estructurales. Un test de coherencia falla si divergen: si cambias una, cambia l
 - Gate: ninguno
 - Cierra con: checkpoint de entendimiento aprobado
 
+Entrevista antes de tocar nada. Usa `grilling` para producir el **checkpoint** (Entendí / Asumo / Necesito que confirmes), con citas `path:line`. No escribas código ni abras ninguna etapa posterior hasta que el usuario apruebe ese checkpoint. Si ya lo trae en la conversación, recíbelo, confírmalo en una línea y sigue.
+
 ## Fase 2 — Vocabulario
 
 - Skill: `domain-modeling`
 - Gate: ninguno
 - Cierra con: términos y ADR acordados
+
+Fija el vocabulario antes de diseñar: `GLOSSARY.md` y ADRs. `CONTEXT.md` y `docs/adr/**` sólo se escriben si ya existían cuando se ejecutó `/flow start`; si no existían, propón el contenido en el checkpoint y deja que el usuario decida. No inventes términos que el código no usa.
 
 ## Fase 3 — Diseño del módulo
 
@@ -121,13 +125,15 @@ estructurales. Un test de coherencia falla si divergen: si cambias una, cambia l
 - Gate: ninguno
 - Cierra con: costuras y tests definidos
 
+Diseña como **deep module**: interface estrecha, costura clara, tests en la costura. Entrega costuras y tests definidos, no código. Si el diseño no se sostiene, dilo antes de implementarlo.
+
 ## Fase 4 — Sondear
 
 - Skill: `prototype`
 - Gate: ninguno
 - Cierra con: respuesta a una pregunta de diseño
 
-Escribe sólo en `/tmp/opencode-proto-<slug>`. Nunca dentro del árbol del proyecto. Es desechable: no se commitea.
+Responde UNA pregunta de diseño con el prototipo más pequeño que baste; registra qué aprendiste y qué descartaste. Escribe sólo en `/tmp/opencode-proto-<slug>`, nunca dentro del árbol del proyecto. Es desechable: no se commitea.
 
 ## Fase 5 — Especificar
 

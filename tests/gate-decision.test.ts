@@ -47,11 +47,9 @@ test("escritura sin flow activo: permitida", () => {
   assert.equal(decide({ tool: "write" }).kind, "allow")
 })
 
-// Comportamiento ACTUAL de las fases 1-4 con escritura (se invierte en 4e):
-// hoy devuelven `evaluate`, es decir "consulta el gate, el gate dirá". Todavía NO
-// bloquean por sí mismas. La decisión B exige que las escrituras fuera de .scratch/
-// sí se bloqueen en las fases 1-6; eso se implementa en 4e y este test cambiará.
-test("4e-pendiente: escritura en fases 1-4 NO se bloquea en la criba (comportamiento actual)", () => {
+// La criba sólo clasifica; la política de rutas vive en verdictFor (Gate B). Incluso las
+// fases 1-4 delegan: el bloqueo real lo decide gate.ts con el whitelist.
+test("B: escritura en fases 1-4 delega en verdictFor (no bloquea en la criba)", () => {
   for (const fase of [1, 2, 3, 4]) {
     const decision = decide({ tool: "write", state: { fase, active: true } })
     assert.notEqual(decision.kind, "free", "no es lectura: sí consulta el estado")
@@ -59,7 +57,7 @@ test("4e-pendiente: escritura en fases 1-4 NO se bloquea en la criba (comportami
   }
 })
 
-test("4e-pendiente: escritura en fase 5+ tampoco bloquea la criba; bloquea verdictFor", () => {
+test("B: escritura en fase 5+ también delega en verdictFor", () => {
   const decision = decide({ tool: "write", state: { fase: 9, active: true } })
   assert.equal(decision.kind, "evaluate")
 })

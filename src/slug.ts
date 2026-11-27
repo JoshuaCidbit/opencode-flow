@@ -37,6 +37,14 @@ function baseSlug(description: string): string {
     .replace(/-+$/g, "")
 }
 
+/** Forma canónica de un slug de feature: minúsculas, dígitos y guiones, 1-40 caracteres. */
+const SLUG_RE = /^[a-z0-9-]{1,40}$/
+
+/** `true` si el valor puede usarse tal cual como nombre de feature (no normaliza, valida). */
+export function isValidSlug(value: string): boolean {
+  return SLUG_RE.test(value) && !value.includes("--") && !value.startsWith("-") && !value.endsWith("-")
+}
+
 /**
  * Convierte texto libre en un slug kebab-case válido para usar como nombre de directorio.
  * Devuelve undefined si tras normalizar no queda ningún carácter válido (emojis, símbolos,
