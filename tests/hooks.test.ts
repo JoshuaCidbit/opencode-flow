@@ -419,3 +419,36 @@ test("P3: un subcomando válido con argumentos sigue escribiendo estado", async 
   await h.run("s1", "back 3")
   assert.equal(h.state("s1")?.fase, 2, "back 3 debe mover a la 2")
 })
+
+// --- P4: el modelo recibe el tema, no sólo el slug ----------------------------------------
+test("P4: /flow <descripción> con acentos y texto largo llega al modelo como tema", async () => {
+  const root = mkdtempSync(join(tmpdir(), "flow-p4-topic-"))
+  const topic =
+    "Autenticación con tokens de sesión y rotación automática de claves en el borde, " +
+    "incluyendo revocación por dispositivo, auditoría de accesos y límites por usuario."
+  const h = await harness({ root })
+  await h.run("s1", topic)
+  const out = h.replies.join("\n")
+  assert.match(out, /Tema inicial del usuario:/, "falta la línea del tema")
+  // El tema llega COMPLETO y con acentos: no es el slug, que pierde ambos.
+  assert.ok(out.includes(topic), `el tema no llegó tal cual:\n${out}`)
+  // Y el slug, que nombra archivos, sigue siendo slug.
+  const feature = h.state("s1")?.feature
+  assert.ok(feature && !/[^a-z0-9-]/.test(feature), `el slug no es slug: ${feature}`)
+})
+
+test("P4: un tema de más de 500 caracteres se recorta sin reventar el mensaje", async () => {
+  const root = mkdtempSync(join(tmpdir(), "flow-p4-trim-"))
+  const topic = "Autenticación con tokens de sesión y rotación de claves. ".repeat(30)
+  const h = await harness({ root })
+  await h.run("s1", topic)
+  const out = h.replies.join("\n")
+  const line = out.split("\n").find((l) => l.startsWith("Tema inicial del usuario:"))
+  assert.ok(line, "falta la línea del tema")
+  // 500 caracteres + "…": el recorte se ve y no se come el resto del mensaje.
+  assert.ok(line.length <= "Tema inicial del usuario: ".length + 501, `la línea no se recortó: ${line.length}`)
+  assert.ok(line.endsWith("…"), "el recorte se marca con elipsis")
+  // El mensaje sigue teniendo la fase y el skill: el tema largo no tapa el resto.
+  assert.match(out, /Fase 1 · Entender/)
+  assert.match(out, /Skill a cargar: grilling/)
+})

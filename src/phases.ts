@@ -159,7 +159,7 @@ export function suggestSubcommand(raw: string): string | undefined {
 
 export type Parsed =
   | { kind: "help"; reason?: string; suggestion?: string }
-  | { kind: "start"; fase: PhaseNumber; feature?: string }
+  | { kind: "start"; fase: PhaseNumber; feature?: string; topic?: string }
   | { kind: "status" }
   | { kind: "gate"; gate: GateName }
   | { kind: "bad-gate"; name: string }
@@ -258,7 +258,18 @@ export function parseCommand(text: string, options: { active?: boolean } = {}): 
   if (!feature) {
     return { kind: "help", reason: `no pude derivar un slug de "${text}"`, suggestion: suggestSubcommand(head) }
   }
-  return { kind: "start", fase: FIRST_PHASE, feature }
+  return { kind: "start", fase: FIRST_PHASE, feature, topic: topicFrom(text) }
+}
+
+/**
+ * Texto original del usuario, recortado. P4: el slug sirve para nombrar archivos, pero el slug
+ * PIERDE el tema real (se queda en 60 caracteres y sin acentos). Quien retoma necesita leer qué
+ * se pidió, no adivinarlo de `autenticacion-con-tokens-de-sesion-y-rotacion`.
+ */
+export const TOPIC_MAX = 500
+function topicFrom(raw: string): string {
+  const text = raw.trim()
+  return text.length > TOPIC_MAX ? `${text.slice(0, TOPIC_MAX)}…` : text
 }
 
 /** Motivo de ayuda para un texto no reconocido, con la sugerencia si la hay. */
@@ -328,7 +339,7 @@ export function artifactPaths(feature: string | undefined, entry: Phase | undefi
  * que se puede deducir de los datos: número, nombre, skill, gate y artefacto. El gate
  * y las skills siguen funcionando sin contrato: sólo se pierde la guía en prosa.
  */
-export function phaseBrief(fase: number, feature?: string): string {
+export function phaseBrief(fase: number, feature?: string, topic?: string): string {
   const entry = phase(fase)
   if (!entry) return `${narration(fase, "gate desconocido")}\nFase ${fase} fuera del mapa (1-${LAST_PHASE}).`
   const lines = [
@@ -338,6 +349,9 @@ export function phaseBrief(fase: number, feature?: string): string {
     `Skill a cargar: ${entry.skill}`,
     `Cierra con: ${scopeToFeature(entry.closes, feature)}`,
   ]
+  // P4: el slug nombra archivos pero NO conserva el tema (se recorta y pierde acentos). El
+  // texto original se muestra tal cual para que quien retoma lea qué se pidió, no lo adivine.
+  if (topic) lines.push(`Tema inicial del usuario: ${topic}`)
   if (feature) lines.push(`Feature declarada: ${feature} (raíz de artefactos: .scratch/${feature}/)`)
   else if (entry.blocks) lines.push(`Artefacto exigido: falta declarar feature con /flow start ${entry.n} <slug>.`)
   if (entry.gate) lines.push(`Gate de esta fase: ${entry.gate} — ciérralo con /flow gate ${entry.gate}.`)

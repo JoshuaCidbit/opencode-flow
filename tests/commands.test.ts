@@ -73,16 +73,21 @@ test("P3: con flow activo, un subcomando mal escrito da ayuda (no arranca otra f
   for (const typo of ["stauts", "nxt", "of", "statuss", "hepl", "bakc", "startt", "gatee"]) {
     const parsed = parseCommand(typo, { active: true })
     assert.equal(parsed.kind, "help", `"${typo}" no dio ayuda`)
-    assert.ok(parsed.reason, `"${typo}" sin motivo`)
+    assert.ok(parsed.kind === "help" && parsed.reason, `"${typo}" sin motivo`)
   }
 })
 
 test("P3: la sugerencia sale por distancia de edición <= 2", () => {
-  assert.equal(parseCommand("stauts", { active: true }).suggestion, "status")
-  assert.equal(parseCommand("nxt", { active: true }).suggestion, "next")
-  assert.equal(parseCommand("of", { active: true }).suggestion, "off")
-  assert.equal(parseCommand("hepl", { active: true }).suggestion, "help")
-  assert.equal(parseCommand("bakc", { active: true }).suggestion, "back")
+  const s1 = parseCommand("stauts", { active: true })
+  assert.equal(s1.kind === "help" && s1.suggestion, "status")
+  const s2 = parseCommand("nxt", { active: true })
+  assert.equal(s2.kind === "help" && s2.suggestion, "next")
+  const s3 = parseCommand("of", { active: true })
+  assert.equal(s3.kind === "help" && s3.suggestion, "off")
+  const s4 = parseCommand("hepl", { active: true })
+  assert.equal(s4.kind === "help" && s4.suggestion, "help")
+  const s5 = parseCommand("bakc", { active: true })
+  assert.equal(s5.kind === "help" && s5.suggestion, "back")
 })
 
 test("P3: normaliza mayúsculas y acentos antes de comparar", () => {
@@ -96,15 +101,17 @@ test("P3: normaliza mayúsculas y acentos antes de comparar", () => {
   assert.equal(parseCommand("Néxt", { active: true }).kind, "next")
   assert.equal(parseCommand("Óff", { active: false }).kind, "off")
   assert.equal(parseCommand("ÓFF", { active: false }).kind, "off")
-  assert.equal(parseCommand("BACK 3", { active: true }).steps, 3)
+  const back3 = parseCommand("BACK 3", { active: true })
+  assert.equal(back3.kind === "back" && back3.steps, 3)
   // Y el parecido también se mide ya normalizado.
-  assert.equal(parseCommand("STÁTUSX", { active: true }).suggestion, "status")
+  const sug = parseCommand("STÁTUSX", { active: true })
+  assert.equal(sug.kind === "help" && sug.suggestion, "status")
 })
 
 test("P3: sin nada parecido no se sugiere (la ayuda no es ruido)", () => {
   const parsed = parseCommand("zzzzzzzz", { active: true })
   assert.equal(parsed.kind, "help")
-  assert.equal(parsed.suggestion, undefined, "no debe sugerir cualquier cosa")
+  assert.equal(parsed.kind === "help" && parsed.suggestion, undefined, "no debe sugerir cualquier cosa")
 })
 
 test("P3: con flow INACTIVO, una sola palabra desconocida da ayuda", () => {
@@ -115,7 +122,7 @@ test("P3: con flow INACTIVO, una sola palabra desconocida da ayuda", () => {
 test("P3: con flow INACTIVO, una descripción de 2+ palabras sigue arrancando", () => {
   const parsed = parseCommand("auth con tokens")
   assert.equal(parsed.kind, "start", "una descripción libre sigue siendo un arranque")
-  assert.equal(parsed.feature, "auth-con-tokens")
+  assert.equal(parsed.kind === "start" && parsed.feature, "auth-con-tokens")
 })
 
 test("P3: la ayuda con flow activo dice cómo empezar otra feature", () => {
@@ -129,28 +136,56 @@ test("P3: la ayuda con flow activo dice cómo empezar otra feature", () => {
 test("P3: no se rompen back 3, gate tickets, resume, rename ni start con slug", () => {
   const back3 = parseCommand("back 3", { active: true })
   assert.equal(back3.kind, "back")
-  assert.equal(back3.steps, 3)
+  assert.equal(back3.kind === "back" && back3.steps, 3)
 
   const gate = parseCommand("gate tickets", { active: true })
   assert.equal(gate.kind, "gate")
-  assert.equal(gate.gate, "tickets")
+  assert.equal(gate.kind === "gate" && gate.gate, "tickets")
 
   const resume = parseCommand("resume auth-core", { active: true })
   assert.equal(resume.kind, "resume")
-  assert.equal(resume.feature, "auth-core")
+  assert.equal(resume.kind === "resume" && resume.feature, "auth-core")
 
   const rename = parseCommand("rename auth-core", { active: true })
   assert.equal(rename.kind, "rename")
-  assert.equal(rename.feature, "auth-core")
+  assert.equal(rename.kind === "rename" && rename.feature, "auth-core")
 
   const start = parseCommand("start 5 slug-valido", { active: true })
   assert.equal(start.kind, "start")
-  assert.equal(start.fase, 5)
-  assert.equal(start.feature, "slug-valido")
+  assert.equal(start.kind === "start" && start.fase, 5)
+  assert.equal(start.kind === "start" && start.feature, "slug-valido")
 
   // `miSlug` (con mayúsculas) NO es un slug válido: el slug va en minúsculas. Lo que no puede
   // romperse es el PARSEADO (se reconoce `start N`), no la validación del slug.
   const badSlug = parseCommand("start 5 miSlug", { active: true })
   assert.equal(badSlug.kind, "help", "un slug con mayúsculas no se acepta")
-  assert.match(badSlug.reason ?? "", /slug "miSlug" inválido/, "y el motivo dice qué pasó")
+  assert.match((badSlug.kind === "help" && badSlug.reason) || "", /slug "miSlug" inválido/, "y el motivo dice qué pasó")
+})
+
+// --- P4: el tema inicial del usuario ------------------------------------------------------
+// El slug nombra archivos, pero NO conserva el tema: se recorta y pierde acentos. Un flow bien
+// sluggeado puede ser ilegible ("autenticacion-con-tokens-de-sesion-y-rotacion"). El texto
+// original viaja aparte para que quien retoma lea qué se pidió.
+
+test("P4: /flow <descripción> guarda el tema original recortado a 500", () => {
+  const short = parseCommand("auth con tokens")
+  assert.equal(short.kind, "start")
+  assert.equal(short.kind === "start" && short.topic, "auth con tokens", "el tema es el texto tal cual")
+
+  const long = parseCommand("x ".repeat(400))
+  assert.equal(long.kind, "start")
+  const longTopic = long.kind === "start" ? long.topic : undefined
+  assert.equal(longTopic?.length, 501, "500 de texto + la elipsis")
+  assert.ok(longTopic?.endsWith("…"), "el recorte se marca con elipsis")
+  assert.ok(longTopic?.startsWith("x x x"), "se conserva el principio, no el final")
+})
+
+test("P4: el tema conserva acentos y mayúsculas (el slug no)", () => {
+  const topic = "Autenticación con tokens de sesión y rotación automática"
+  const parsed = parseCommand(topic)
+  assert.equal(parsed.kind, "start")
+  assert.equal(parsed.kind === "start" && parsed.topic, topic, "el tema va tal cual, con acentos")
+  const feature = parsed.kind === "start" ? parsed.feature : undefined
+  assert.equal(feature, "autenticacion-con-tokens-de-sesion-y-rotacion-automatica")
+  assert.ok(feature && !/[áéíóú]/.test(feature), "el slug sigue sin acentos")
 })

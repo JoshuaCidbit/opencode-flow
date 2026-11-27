@@ -537,8 +537,8 @@ export default Plugin.define({
               // acto explícito (/flow start). Si el runtime no permite el hook, el flow
               // sólo guía: no debe fingir que bloquea.
               `${offer}${gateAvailable
-                ? phaseBrief(parsed.fase, feature)
-                : `${phaseBrief(parsed.fase, feature)}\n\nAVISO: gate de escritura no disponible en este runtime: el flow solo guía, no bloquea.`}`,
+                ? phaseBrief(parsed.fase, feature, parsed.topic)
+                : `${phaseBrief(parsed.fase, feature, parsed.topic)}\n\nAVISO: gate de escritura no disponible en este runtime: el flow solo guía, no bloquea.`}`,
             )
             return
           }
