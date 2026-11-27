@@ -304,6 +304,7 @@ function flowAddendum(state: FlowState | undefined, messages: unknown): string {
       `- Fase actual del mapa: fase ${state.fase}`,
       `- Gate pendiente: ${state.gate ?? "checkpoint aprobado por el usuario"}`,
       `- Feature: ${state.feature ?? "no declarada"}`,
+      ...(state.topic ? [`- Tema inicial del usuario: ${state.topic}`] : []),
       `- Flow activo: ${state.active ? "sí" : "no"}`,
     ].join("\n")
   }
@@ -451,7 +452,17 @@ export default Plugin.define({
             return
           case "off": {
             // No usa `commit`: apagar significa BORRAR el entry, no escribir otro.
-            await writeState(owner, buildState({ fase: previous?.fase ?? 1, ...(previous?.gate ? { gate: previous.gate } : {}), ...(previous?.feature ? { feature: previous.feature } : {}), ...inheritedAllow, active: false }))
+            await writeState(
+              owner,
+              buildState({
+                fase: previous?.fase ?? 1,
+                ...(previous?.gate ? { gate: previous.gate } : {}),
+                ...(previous?.feature ? { feature: previous.feature } : {}),
+                ...(previous?.topic ? { topic: previous.topic } : {}),
+                ...inheritedAllow,
+                active: false,
+              }),
+            )
             // Punto (b): el entry desaparece al apagar. Si el runtime no expone la API,
             // seguimos: el silencio del flow ya es la señal.
             await syncStateEntry(ctx.session as never, input.sessionID, undefined)
@@ -474,6 +485,7 @@ export default Plugin.define({
               [
                 contextSummary(previous),
                 requirement ?? "gate: declarativo",
+                ...(previous.topic ? [`tema: ${previous.topic}`] : []),
                 ...(lastGateError ? [`AVISO: ${lastGateError}`] : []),
               ].join(" · "),
             )
@@ -492,6 +504,7 @@ export default Plugin.define({
               fase: next,
               ...(gate ? { gate } : {}),
               ...(previous?.feature ? { feature: previous.feature } : {}),
+              ...(previous?.topic ? { topic: previous.topic } : {}),
               // Cerrar la puerta de tickets ES comprometerse con ellos, aunque un resume
               // previo hubiera fijado `ticketsOpted:false`.
               ...(target.n === 6 ? { ticketsOpted: true } : previous?.ticketsOpted === undefined ? {} : { ticketsOpted: previous.ticketsOpted }),
@@ -516,12 +529,14 @@ export default Plugin.define({
             const marker = !explicit && !previous ? readFeatureMarker(projectRoot) : undefined
             const feature = explicit ?? previous?.feature ?? marker?.slug ?? provisionalSlug(input.sessionID)
             const provisional = !explicit && !previous?.feature && !marker
+            const topic = parsed.topic ?? (feature === previous?.feature ? previous?.topic : undefined)
             // Uniforme con resume: si ya hay tickets en disco, se adoptan (lo escrito manda).
             const ticketsOpted = previous?.ticketsOpted ?? (adoptsTickets({ feature }, projectRoot) ? true : undefined)
             await commit({
               fase: parsed.fase,
               ...(gate ? { gate } : {}),
               feature,
+              ...(topic ? { topic } : {}),
               ...(provisional ? { slugProvisional: true } : {}),
               ...(ticketsOpted === undefined ? {} : { ticketsOpted }),
               ...(allow.length > 0 ? { allow } : {}),
@@ -537,8 +552,8 @@ export default Plugin.define({
               // acto explícito (/flow start). Si el runtime no permite el hook, el flow
               // sólo guía: no debe fingir que bloquea.
               `${offer}${gateAvailable
-                ? phaseBrief(parsed.fase, feature, parsed.topic)
-                : `${phaseBrief(parsed.fase, feature, parsed.topic)}\n\nAVISO: gate de escritura no disponible en este runtime: el flow solo guía, no bloquea.`}`,
+                ? phaseBrief(parsed.fase, feature, topic)
+                : `${phaseBrief(parsed.fase, feature, topic)}\n\nAVISO: gate de escritura no disponible en este runtime: el flow solo guía, no bloquea.`}`,
             )
             return
           }
@@ -558,6 +573,7 @@ export default Plugin.define({
               fase: next,
               ...(entry?.gate ? { gate: entry.gate } : {}),
               ...(previous.feature ? { feature: previous.feature } : {}),
+              ...(previous.topic ? { topic: previous.topic } : {}),
               ...(previous.slugProvisional ? { slugProvisional: true } : {}),
               ...(opted === undefined ? {} : { ticketsOpted: opted }),
               ...inheritedAllow,
@@ -585,6 +601,7 @@ export default Plugin.define({
               fase: target,
               ...(entry?.gate ? { gate: entry.gate } : {}),
               ...(previous.feature ? { feature: previous.feature } : {}),
+              ...(previous.topic ? { topic: previous.topic } : {}),
               ...(previous.slugProvisional ? { slugProvisional: true } : {}),
               allow,
               active: true,
@@ -626,6 +643,7 @@ export default Plugin.define({
               fase: previous.fase,
               ...(previous.gate ? { gate: previous.gate } : {}),
               feature: newFeature,
+              ...(previous.topic ? { topic: previous.topic } : {}),
               ...(previous.slugProvisional ? { slugProvisional: true } : {}),
               ...(previous.ticketsOpted === undefined ? {} : { ticketsOpted: previous.ticketsOpted }),
               ...inheritedAllow,
@@ -646,6 +664,7 @@ export default Plugin.define({
             const marker = parsed.feature ? undefined : readFeatureMarker(projectRoot)
             const feature = parsed.feature ?? previous?.feature ?? marker?.slug ?? provisionalSlug(input.sessionID)
             const provisional = !parsed.feature && !previous?.feature && !marker
+            const topic = !parsed.feature || parsed.feature === previous?.feature ? previous?.topic : undefined
             // Estado en storage MANDA sobre la deducción: si hay estado, su fase es la última
             // decisión explícita del usuario (next/back/gate), no una conjetura por artefactos.
             // Sólo sin estado se deduce, y entonces se dice qué se dedujo y por qué.
@@ -679,6 +698,7 @@ export default Plugin.define({
               fase,
               ...(entry?.gate ? { gate: entry.gate } : {}),
               feature,
+              ...(topic ? { topic } : {}),
               ...(provisional || previous?.slugProvisional ? { slugProvisional: true } : {}),
               ...(ticketsOpted === undefined ? {} : { ticketsOpted }),
               allow,
@@ -692,7 +712,7 @@ export default Plugin.define({
                 `[flow] reactivado en fase ${fase} · feature ${feature}\n` +
                 `[flow] por qué: ${why}` +
                 `\n` +
-                `${phaseBrief(fase, feature)}`,
+                `${phaseBrief(fase, feature, topic)}`,
             )
             return
           }

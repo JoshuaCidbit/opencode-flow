@@ -29,6 +29,17 @@
   deducían la fase 3 en una feature nueva, dando por aprobado un vocabulario que nadie aprobó.
 - P2: el mensaje de `resume` avisa de que existir no implica estar aprobado y remite a
   `/flow back`. Los tickets de `issues/` ignoran vacíos, dotfiles y `README.md`.
+- P3: con el flow activo, un texto no reconocido daba por descripción y podía ARRANCAR OTRA
+  FEATURE encima de la que estaba en curso. Ahora `parseCommand(text, { active })` da ayuda con
+  sugerencia por distancia de edición <= 2, normalizando mayúsculas y acentos. La rama de ayuda
+  no escribe estado ni toca `entry.put/remove`.
+- P4: `/flow <descripción>` conserva el tema original (`Parsed.start.topic`, recortado a 500) en
+  `FlowState.topic` y lo muestra como "Tema inicial del usuario" al arrancar, al retomar con
+  `/flow resume`, en `/flow status` y en el addendum de compactación.
+- P5: una única constante `MAX_SLUG = 60` en `slug.ts`, consumida por `slugify`, `isValidSlug`,
+  `readFeatureMarker` (que delega en `isValidSlug`), `withCollisionSuffix` y los mensajes de ayuda.
+  El sufijo de colisión recorta la base antes de añadirse; los reservados de Windows se normalizan,
+  truncan y DESPUÉS se prefijan.
 ### Limitación conocida
 - El bloque común se inyecta en TODA petición activa, así que la escalera de verificación y las
   escaladas (que aplican sobre todo desde la fase 7) se pagan también en las fases 1-4. Se acepta
@@ -60,7 +71,7 @@ tickets (A2 + A10 + Gate B + C1/C2/C7). Etiqueta pendiente de la prueba manual e
   - fases 1-6: sólo `.scratch/<feature>/**`; fase 4 también `/tmp/opencode-proto-<feature>/**`.
   - fases 2-3: también `CONTEXT.md` y `docs/adr/**`, **sólo si existían al `/flow start`** (congelado en
     `state.allow`; no se abre a posteriori).
-  - fase 7+: código del proyecto exige `spec.md`. Los tickets se exigen **sólo si hubo compromiso**
+- fase 7+: código del proyecto exige `spec.md`. Los tickets se exigen **sólo si hubo compromiso**
     (`ticketsOpted`): recorrer la 6, cerrar `/flow gate tickets` o tener tickets en disco; `flow.md`
     admite implementar con `tdd`, y exigirlos sin compromiso inventaría una fase que nunca se recorrió.
 - Endurecido:
@@ -68,7 +79,7 @@ tickets (A2 + A10 + Gate B + C1/C2/C7). Etiqueta pendiente de la prueba manual e
   - tickets vacíos, ocultos, `README.md` o que no sean `.md` no cierran el gate.
   - contención real de rutas (`resolve` + `realpath` del ancestro): bloquea `..` y symlinks que escapan.
   - `apply_patch` es todo-o-nada sobre el whitelist.
-  - `parseCommand` valida slug `[a-z0-9-]{1,40}` con error claro; rechaza `.` `/` `\` y fases fuera de 1-10.
+  - `parseCommand` valida slug `[a-z0-9-]{1,60}` con error claro; rechaza `.` `/` `\` y fases fuera de 1-10.
   - `isState` valida `allow` como `string[]`.
 - Versión del gate endurecida (antes 1, ahora 2) sin cambiar la forma del estado.
 

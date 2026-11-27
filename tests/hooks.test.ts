@@ -452,3 +452,26 @@ test("P4: un tema de más de 500 caracteres se recorta sin reventar el mensaje",
   assert.match(out, /Fase 1 · Entender/)
   assert.match(out, /Skill a cargar: grilling/)
 })
+
+test("P4 (persistencia): topic se conserva tras next, status, compaction y resume", async () => {
+  const root = mkdtempSync(join(tmpdir(), "flow-p4-persist-"))
+  const topic = "Autenticación con tokens de sesión y rotación automática"
+  const h = await harness({ root })
+  await h.run("s1", topic)
+  assert.equal(h.state("s1")?.topic, topic)
+
+  await h.run("s1", "next")
+  assert.equal(h.state("s1")?.topic, topic, "next conserva topic")
+
+  h.replies.length = 0
+  await h.run("s1", "status")
+  assert.ok(h.replies.join("\n").includes(`tema: ${topic}`), "status muestra el tema")
+
+  const compacted = await h.compaction("s1")
+  assert.ok(compacted?.includes(`Tema inicial del usuario: ${topic}`), "compaction preserva el tema")
+
+  await h.run("s1", "off")
+  h.replies.length = 0
+  await h.run("s1", "resume")
+  assert.ok(h.replies.join("\n").includes(`Tema inicial del usuario: ${topic}`), "resume reemite el tema")
+})

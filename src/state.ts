@@ -10,6 +10,8 @@ export type FlowState = {
   fase: number
   gate?: string
   feature?: string
+  /** P4: descripción original del usuario recortada (el slug pierde acentos y se trunca a 60). */
+  topic?: string
   slugProvisional?: boolean
   active: boolean
   /**
@@ -46,6 +48,7 @@ export function isState(value: unknown): value is FlowState {
   if (!value || typeof value !== "object") return false
   const typed = value as Record<string, unknown>
   if (typeof typed.fase !== "number" || typeof typed.active !== "boolean") return false
+  if (typed.topic !== undefined && typeof typed.topic !== "string") return false
   // Gate B: `allow` es una lista de rutas relativas; cualquier otra forma se descarta.
   if (typed.allow !== undefined && (!Array.isArray(typed.allow) || !typed.allow.every((item) => typeof item === "string"))) {
     return false
@@ -115,16 +118,18 @@ export function noticeAdvance(before: FlowState, after: FlowState): string | und
   if (after.fase <= before.fase) return undefined
   return `[flow] auto-avance: fase ${before.fase} → ${after.fase} (artefacto detectado en disco). Usa /flow back para retroceder.`
 }
+
 /**
  * Construye un `FlowState` a partir de campos opcionales. UNA sola definición de qué
  * claves se guardan y con qué forma; los comandos no repiten el mismo spread cada uno.
- * `gate`/`feature`/`slugProvisional`/`ticketsOpted`/`allow` sólo aparecen si tienen valor.
+ * `gate`/`feature`/`topic`/`slugProvisional`/`ticketsOpted`/`allow` sólo aparecen si tienen valor.
  */
 export type StateSeed = {
   fase: number
   active: boolean
   gate?: string
   feature?: string
+  topic?: string
   slugProvisional?: boolean
   ticketsOpted?: boolean
   allow?: string[]
@@ -136,11 +141,13 @@ export function buildState(seed: StateSeed): FlowState {
     active: seed.active,
     ...(seed.gate ? { gate: seed.gate } : {}),
     ...(seed.feature ? { feature: seed.feature } : {}),
+    ...(seed.topic ? { topic: seed.topic } : {}),
     ...(seed.slugProvisional ? { slugProvisional: true } : {}),
     ...(seed.ticketsOpted === undefined ? {} : { ticketsOpted: seed.ticketsOpted }),
     ...(seed.allow && seed.allow.length > 0 ? { allow: seed.allow } : {}),
   }
 }
+
 /**
  * Busca el estado subiendo por la cadena de `parentID`.
  * Devuelve `{ state, ownerID }` para que el llamador escriba siempre en el dueño.
