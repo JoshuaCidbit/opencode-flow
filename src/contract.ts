@@ -130,3 +130,16 @@ export function renderFor(contract: string, fase: number): { text: string; degra
 
   return { text: `${sections.common}\n\n${section}`.trim(), degraded: false }
 }
+
+/**
+ * El contrato escribe las rutas con el placeholder `<feature>`: si se inyectara tal cual, el
+ * modelo no sabría qué slug usar y escribiría en un directorio literal `<feature>`. Aquí se
+ * sustituye SÓLO ese token por la feature declarada; `<slug>` se queda, porque es sintaxis de
+ * comando (`/flow rename <slug>`) y no una ruta.
+ *
+ * Sin feature declarada (slug vacío) el texto queda intacto: el gate ya avisa de que falta.
+ */
+export function scopeToFeature(text: string, feature: string | undefined): string {
+  if (!feature) return text
+  return text.split("<feature>").join(feature)
+}

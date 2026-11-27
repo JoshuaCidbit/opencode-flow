@@ -1,5 +1,7 @@
 // Single source of truth for the phase map. `flow.md` stays prose and is updated by hand.
 import { isValidSlug, slugify } from "./slug.ts"
+import { scopeToFeature } from "./contract.ts"
+import { artifactPaths } from "./gate.ts"
 //
 // Rule: phase numbers here must match the table in `flow.md`. Nothing else reads the prose.
 
@@ -25,14 +27,14 @@ export type Phase = {
 }
 
 export const PHASES: readonly Phase[] = [
-  { n: 1, name: "Entender", skill: "grilling", closes: "checkpoint de entendimiento aprobado", blocks: false },
-  { n: 2, name: "Vocabulario", skill: "domain-modeling", closes: "términos y ADR acordados", blocks: false },
-  { n: 3, name: "Diseño del módulo", skill: "codebase-design", closes: "costuras y tests definidos", blocks: false },
+  { n: 1, name: "Entender", skill: "grilling", closes: ".scratch/<feature>/understanding.md aprobado por el usuario", blocks: false },
+  { n: 2, name: "Vocabulario", skill: "domain-modeling", closes: ".scratch/<feature>/glossary.md aprobado por el usuario", blocks: false },
+  { n: 3, name: "Diseño de módulos", skill: "codebase-design", closes: ".scratch/<feature>/design.md aprobado por el usuario", blocks: false },
   {
     n: 4,
     name: "Sondear",
     skill: "prototype",
-    closes: "respuesta a una pregunta de diseño",
+    closes: "respuesta a una pregunta de diseño anotada en design.md",
     blocks: false,
   },
   {
@@ -240,6 +242,10 @@ export function phaseBrief(fase: number, feature?: string): string {
   if (feature) lines.push(`Feature declarada: ${feature} (raíz de artefactos: .scratch/${feature}/)`)
   else if (entry.blocks) lines.push(`Artefacto exigido: falta declarar feature con /flow start ${entry.n} <slug>.`)
   if (entry.gate) lines.push(`Gate de esta fase: ${entry.gate} — ciérralo con /flow gate ${entry.gate}.`)
+  if (entry.blocks) {
+    const names = artifactPaths(feature, entry)
+    if (names) lines.push(`Escribe hoy: ${scopeToFeature(names.join(" "), feature)}`)
+  }
   return lines.join("\n")
 }
 

@@ -30,7 +30,7 @@ import {
 } from "./state.ts"
 import { makeLogger, OnceLog } from "./log.ts"
 import { decide, WRITING_TOOLS } from "./gate-decision.ts"
-import { renderFor } from "./contract.ts"
+import { renderFor, scopeToFeature } from "./contract.ts"
 import { provisionalSlug } from "./slug.ts"
 import { reply, syncStateEntry, offMessage } from "./visibility.ts"
 import { deducePhaseInfo, readFeatureMarker, writeFeatureMarker } from "./feature.ts"
@@ -721,7 +721,7 @@ export default Plugin.define({
               `el contrato no tiene secciones '## Fase N' (${contractSource}); inyecto el archivo completo como degradación`,
             )
           }
-          push(event, rendered?.text ?? phaseBrief(state.fase, state.feature), kind)
+          push(event, scopeToFeature(rendered?.text ?? phaseBrief(state.fase, state.feature), state.feature), kind)
         }),
       )
     }

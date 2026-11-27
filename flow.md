@@ -6,10 +6,10 @@ Reglas no negociables, activas en cada petición. Si una petición del usuario l
 
 | # | Fase | Skill | Cierra con |
 |---|------|-------|------------|
-| 1 | Entender | `grilling` | checkpoint de entendimiento aprobado |
-| 2 | Vocabulario | `domain-modeling` | términos y ADR acordados |
-| 3 | Diseño del módulo | `codebase-design` | costuras y tests definidos |
-| 4 | Sondear | `prototype` | respuesta a una pregunta de diseño |
+| 1 | Entender | `grilling` | `.scratch/<feature>/understanding.md` aprobado por el usuario |
+| 2 | Vocabulario | `domain-modeling` | `.scratch/<feature>/glossary.md` aprobado por el usuario |
+| 3 | Diseño de módulos | `codebase-design` | `.scratch/<feature>/design.md` aprobado por el usuario |
+| 4 | Sondear | `prototype` | respuesta a una pregunta de diseño anotada en `design.md` |
 | 5 | Especificar | `to-spec` | `.scratch/<feature>/spec.md` |
 | 6 | Trocear | `to-tickets` | tickets verticales con bloqueos |
 | 7 | Implementar | `implement-spec` (con tickets) o `tdd` (sin tickets; siempre en proyectos sin git) | tests en verde |
@@ -31,6 +31,7 @@ Saltar una fase exige decir qué riesgo se asume y obtener aceptación explícit
 - **Fases 1-6:** sólo en `.scratch/<feature>/**`; en la fase 4 también en `/tmp/opencode-proto-<feature>/**`.
 - **Fases 2-3,** y sólo si ya existían al ejecutar `/flow start`: `CONTEXT.md` y `docs/adr/**`.
 - **Fase 7 en adelante:** código del proyecto, con `.scratch/<feature>/spec.md` escrito (y tickets en la fase 7).
+  Escribir el artefacto dentro de `.scratch/` siempre se permite: el gate nunca es un callejón sin salida.
 - El gate bloquea en el runtime. Si te bloquea, no rodees: escribe el artefacto que falta.
 
 ## Checkpoint (entregable de Plan)
@@ -81,7 +82,7 @@ y la sección de la fase actual.
 - `/flow gate <spec|tickets|evidence|review|integration|retro>` — cierra el gate y avanza.
 - `/flow off` — escapatoria; desactiva todo. `/workflow …` es alias.
 
-Tres reglas de uso:
+Cuatro reglas de uso:
 
 1. **Silencio mientras está inactivo.** Con el flow apagado el plugin no inyecta nada: ni recordatorio ni
    contrato. Es opt-in y se mantiene invisible hasta que el usuario escribe `/flow`.
@@ -89,16 +90,11 @@ Tres reglas de uso:
 3. **Auto-avance por artefacto.** Si el flow está activo en fase 5 y ya existe un `.scratch/<feature>/spec.md`
    **no vacío**, o en fase 6 y ya hay un ticket **no vacío, no oculto y no `README.md`** en
    `.scratch/<feature>/issues/`, la fase avanza sola. Las fases 7-10 son declarativas.
+4. **Avanzar es del usuario.** `/flow next` y `/flow back` los ejecuta sólo el usuario; tú nunca.
 
-Gate de escritura (política de rutas, no de nombres):
-
-- **Fases 1-6:** sólo `.scratch/<feature>/**`; en la fase 4 también `/tmp/opencode-proto-<feature>/**`.
-- **Fases 2-3:** además `CONTEXT.md` y `docs/adr/**`, y sólo si ya existían al `/flow start`.
-- **Fase 7 y siguientes:** código del proyecto, con `spec.md` escrito (y tickets en la fase 7). Escribir el
-  artefacto dentro de `.scratch/` siempre se permite: el gate nunca es un callejón sin salida.
-
-Un `patch` es todo-o-nada sobre el conjunto permitido. Las rutas se canonicalizan: `..` y symlinks que escapan
-del proyecto se bloquean. Un artefacto vacío, oculto o llamado `README.md` no cierra el gate.
+El gate de escritura aplica lo dicho en «Dónde se escribe». Un `patch` es todo-o-nada sobre el conjunto
+permitido. Las rutas se canonicalizan: `..` y symlinks que escapan del proyecto se bloquean. Un artefacto
+vacío, oculto o llamado `README.md` no cierra el gate.
 
 Si el runtime no expone hooks de herramientas, el gate se desarma y lo dice al arrancar: nunca rompe la sesión.
 
@@ -109,33 +105,46 @@ estructurales. Un test de coherencia falla si divergen: si cambias una, cambia l
 
 - Skill: `grilling`
 - Gate: ninguno
-- Cierra con: checkpoint de entendimiento aprobado
+- Cierra con: `.scratch/<feature>/understanding.md` aprobado por el usuario
 
-Entrevista antes de tocar nada. Usa `grilling` para producir el **checkpoint** (Entendí / Asumo / Necesito que confirmes), con citas `path:line`. No escribas código ni abras ninguna etapa posterior hasta que el usuario apruebe ese checkpoint. Si ya lo trae en la conversación, recíbelo, confírmalo en una línea y sigue.
+Entiende, no construyas.
+
+1. **Explora antes de preguntar.** Lee código, docs e historial; no preguntes lo que puedes averiguar leyendo.
+2. **Una pregunta por turno.** Empieza por la que más cambiaría el diseño y da tu recomendación con su porqué, para que el usuario pueda aceptarla con un "sí".
+3. **Sin código.** No escribas ni propongas código; en esta fase sólo escribes en `.scratch/<feature>/`.
+4. Cuando no queden dudas de diseño, escribe el checkpoint en `.scratch/<feature>/understanding.md` y muéstralo con el formato del bloque común.
+5. Si el slug es provisional (`flow-xxxxxx`), propón uno descriptivo y pide `/flow rename <slug>`.
+6. **Espera.** Avanzar lo decide el usuario con `/flow next`: nunca lo ejecutes tú ni lo des por hecho. Si aprueba en el chat, recuérdale el comando.
+
+Si ya trae el contexto, confírmalo en una línea y escribe `understanding.md`.
 
 ## Fase 2 — Vocabulario
 
 - Skill: `domain-modeling`
 - Gate: ninguno
-- Cierra con: términos y ADR acordados
+- Cierra con: `.scratch/<feature>/glossary.md` aprobado por el usuario
 
-Fija el vocabulario antes de diseñar: `GLOSSARY.md` y ADRs. `CONTEXT.md` y `docs/adr/**` sólo se escriben si ya existían cuando se ejecutó `/flow start`; si no existían, propón el contenido en el checkpoint y deja que el usuario decida. No inventes términos que el código no usa.
+Lee `understanding.md` y fija el vocabulario del diseño: un término, una definición, un nombre. Reutiliza los del código y la documentación; no inventes sinónimos. Las decisiones no obvias van como ADR corta (contexto, decisión, consecuencias). Si dos términos chocan, una pregunta por turno con tu recomendación.
 
-## Fase 3 — Diseño del módulo
+Escribe siempre `.scratch/<feature>/glossary.md`. Si el proyecto ya tenía `CONTEXT.md` o `docs/adr/` (lo detectó el plugin al arrancar), escribe ahí lo aprobado y deja en `glossary.md` un resumen con la referencia. Si no existían, no los crees: propón el contenido.
+
+## Fase 3 — Diseño de módulos
 
 - Skill: `codebase-design`
 - Gate: ninguno
-- Cierra con: costuras y tests definidos
+- Cierra con: `.scratch/<feature>/design.md` aprobado por el usuario
 
-Diseña como **deep module**: interface estrecha, costura clara, tests en la costura. Entrega costuras y tests definidos, no código. Si el diseño no se sostiene, dilo antes de implementarlo.
+Lee `understanding.md` y `glossary.md` y usa sus términos tal cual; si un nombre no encaja, vuelve a la fase 2.
+
+`.scratch/<feature>/design.md` define los módulos y la responsabilidad de cada uno, la interfaz estrecha (qué expone y qué oculta), las costuras y qué prueba protege cada costura. Prefiere pocos módulos profundos. Señala el mayor riesgo y, si sólo un prototipo lo responde, propón la fase 4. Sin código de implementación.
 
 ## Fase 4 — Sondear
 
 - Skill: `prototype`
 - Gate: ninguno
-- Cierra con: respuesta a una pregunta de diseño
+- Cierra con: respuesta a una pregunta de diseño anotada en `design.md`
 
-Responde UNA pregunta de diseño con el prototipo más pequeño que baste; registra qué aprendiste y qué descartaste. Escribe sólo en `/tmp/opencode-proto-<slug>`, nunca dentro del árbol del proyecto. Es desechable: no se commitea.
+Opcional: el usuario puede saltarla con `/flow next`. Prototipo desechable en `/tmp/opencode-proto-<feature>/`, nunca dentro del proyecto y sin commitear. Responde UNA pregunta de diseño concreta, anota la respuesta en una sección "Sondeo" de `design.md` y para.
 
 ## Fase 5 — Especificar
 

@@ -1,6 +1,19 @@
 # Changelog
 
-## 0.3.0
+- Las secciones 1-4 nombran el artefacto que cierra cada una (`understanding.md`, `glossary.md`,
+  `design.md`) con su ruta bajo `.scratch/<feature>/`: antes no lo decían, así que el modelo no
+  escribía nada y `resume` siempre caía a la fase 1 repitiendo el grilling. La fase 1 fija ahora
+  sus seis reglas (explorar antes de preguntar, una pregunta por turno con recomendación, sin
+  código, artefacto con ruta, slug descriptivo si es provisional, esperar `/flow next` del usuario)
+  en vez de delegarlas en la skill `grilling`, que puede no existir en el host.
+- El contrato se inyecta con `<feature>` YA RESUELTO al slug concreto (`scopeToFeature`): las rutas
+  son ejecutables por el modelo. `<slug>` sigue siendo sintaxis de comando y no se toca.
+- Presupuesto re-medido: máximo 6689 bytes en fase 1 (antes 6330 en la 5); el test nombra la fase
+  más cara y exige un margen de 300-700 B bajo el límite de 7000.
+### Limitación conocida
+- El bloque común se inyecta en TODA petición activa, así que la escalera de verificación y las
+  escaladas (que aplican sobre todo desde la fase 7) se pagan también en las fases 1-4. Se acepta
+  a cambio de reglas críticas presentes siempre; no se ha optimizado por fase.
 
 Reescritura del contrato por secciones, gate por rutas, comandos de reanudación y puerta 7 con
 tickets (A2 + A10 + Gate B + C1/C2/C7). Etiqueta pendiente de la prueba manual en la TUI.

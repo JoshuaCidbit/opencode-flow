@@ -34,6 +34,12 @@ export type Harness = {
   write(sessionID: string, file: string, tool?: string): Promise<string | undefined>
   /** Lee el estado persistido de una sesión. */
   state(sessionID: string): FlowState | undefined
+  /** Dispara el hook `context` y devuelve `event.system` (lo que el modelo recibe). */
+  context(sessionID: string): Promise<string | undefined>
+  /** Entradas `opencode-flow.*` en instructions, en el orden en que se pusieron/borraron. */
+  readonly entries: Map<string, unknown>
+  /** Conteo de escrituras en instructions (`entry.put`). */
+  writes(): number
 }
 
 /** `ctx` mínimo pero HONESTO: mismo cableado que el runtime, dobles en vez de cliente HTTP. */
@@ -53,6 +59,8 @@ export async function harness(initial?: {
   const sessionHooks = new Map<HookName, Hook[]>()
   let execute: ((input: { sessionID: string; prompt?: unknown }) => Promise<void>) | undefined
 
+  const entries = new Map<string, unknown>()
+  const entryPuts: number[] = []
   const store = {
     async get(key: string) {
       return map.get(key)
@@ -85,8 +93,13 @@ export async function harness(initial?: {
       hook: record(sessionHooks),
       instructions: {
         entry: {
-          put: async () => undefined,
-          remove: async () => undefined,
+          put: async (key: string, value: unknown) => {
+            entryPuts.push(1)
+            entries.set(key, value)
+          },
+          remove: async (key: string) => {
+            entries.delete(key)
+          },
         },
       },
       synthetic: async (input: { text?: string }) => {
@@ -136,7 +149,31 @@ export async function harness(initial?: {
     return undefined
   }
 
-  return { root, store, replies, run, write, state: (id) => map.get(`flow:${id}`) as FlowState | undefined }
+  // Mismo cableado que el runtime: el hook recibe `event` y lo que ve el modelo es
+  // `event.system`. Sin esta función no se puede comprobar QUÉ recibe el modelo.
+  const context = async (sessionID: string) => {
+    const list = sessionHooks.get("context") ?? []
+    assert.ok(list.length > 0, "el plugin no registró el hook context")
+    // El runtime entrega `event.system` como ARRAY de partes (medido en 2.4.2): si aquí
+    // fuera un string, el plugin se callaría y el test daría verde sin inyectar nada.
+    const system: Array<{ type?: string; text?: string }> = []
+    const event = { sessionID, system }
+    for (const hook of list) await hook(event)
+    const text = system.map((part) => (typeof part?.text === "string" ? part.text : "")).join("\n")
+    return text.length > 0 ? text : undefined
+  }
+
+  return {
+    root,
+    store,
+    replies,
+    entries,
+    run,
+    write,
+    context,
+    state: (id) => map.get(`flow:${id}`) as FlowState | undefined,
+    writes: () => entryPuts.length,
+  }
 }
 
 /** `spec.md` con contenido: evidencia necesaria (pero no suficiente) para escribir código. */
@@ -263,4 +300,19 @@ test("resume: el estado en storage TIENE PRIORIDAD sobre la deducción por disco
   assert.equal(h.state("s1")?.fase, 3, "la fase guardada (3) no se sustituye por la deducida (6)")
   assert.match(message, /estado guardado/, "y el mensaje dice de dónde viene la fase")
   assert.match(message, /\/flow back/, "avisando de cómo corregirla")
+})
+
+// --- P1: lo que el MODELO recibe (no lo que el plugin calcula) -------------------------
+// El bug de P1 era de cableado: la prosa decía `<feature>` y nadie resolvía ese placeholder,
+// así que el modelo no sabía en qué directorio escribir y `resume` siempre caía a la fase 1.
+test("P1 (cableado): en fase 1 el contrato inyectado lleva el slug concreto y las reglas", async () => {
+  const root = mkdtempSync(join(tmpdir(), "flow-hook-p1-"))
+  const h = await harness({ root })
+  await h.run("s1", "start 1 abc")
+  const injected = await h.context("s1")
+  assert.ok(injected, "el hook context no inyectó nada")
+  assert.ok(injected.includes(".scratch/abc/understanding.md"), "la ruta lleva el slug concreto, no el placeholder")
+  assert.ok(!injected.includes("<feature>"), "sin placeholders de ruta sin resolver")
+  assert.match(injected, /una pregunta por turno/i, "la regla de una pregunta por turno llega al modelo")
+  assert.match(injected, /Sondear|grilling|Explora antes de preguntar/)
 })
