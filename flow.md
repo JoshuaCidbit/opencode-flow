@@ -72,31 +72,33 @@ Si el manifest no declara suite: dilo en vez de inventar un comando, y verifica 
 El contrato activo es este archivo en disco: cada petición con flow activo recibe el bloque común
 y la sección de la fase actual.
 
-- `/flow start [N] [slug]` — activa el flow y declara la feature. Sin slug el gate de escritura queda inactivo.
+- `/flow` — activa en fase 1 con slug provisional derivado de la sesión.
+- `/flow <descripción>` — activa en fase 1 con el slug derivado del texto.
+- `/flow start [N] [slug]` — activa/continúa en la fase N.
+- `/flow next` — avanza una fase; `/flow back [N]` retrocede N (reabre gates).
+- `/flow rename <slug>` — renombra la feature; `/flow resume [slug]` reactiva un flow parado.
 - `/flow status` — fase, gate, feature y ruta del spec.
-- `/flow gate <spec|tickets|evidence|review|integration|retro>` — cierra el gate y avanza de fase.
-- `/flow off` — escapatoria; desactiva todo.
-- `/workflow …` — alias.
+- `/flow gate <spec|tickets|evidence|review|integration|retro>` — cierra el gate y avanza.
+- `/flow off` — escapatoria; desactiva todo. `/workflow …` es alias.
 
 Tres reglas de uso:
 
 1. **Silencio mientras está inactivo.** Con el flow apagado el plugin no inyecta nada: ni recordatorio ni
    contrato. Es opt-in y se mantiene invisible hasta que el usuario escribe `/flow`.
 2. **Silencio en cada turno.** El flow es conversacional: se guía pidiendo, no inyectando avisos.
-3. **Auto-avance por artefacto.** Si el flow está activo en fase 5 y ya existe `.scratch/<feature>/spec.md`,
-   o en fase 6 y ya hay algún `*.md` en `.scratch/<feature>/issues/`, la fase avanza sola: no hace falta
-   `/flow gate spec|tickets`. Las fases 7-10 son declarativas y no auto-avanzan.
+3. **Auto-avance por artefacto.** Si el flow está activo en fase 5 y ya existe un `.scratch/<feature>/spec.md`
+   **no vacío**, o en fase 6 y ya hay un ticket **no vacío, no oculto y no `README.md`** en
+   `.scratch/<feature>/issues/`, la fase avanza sola. Las fases 7-10 son declarativas.
 
-El gate sólo intercepta herramientas de escritura (`write`, `edit`, `patch`, `multiedit`, `apply_patch`):
-leer, buscar y ejecutar comandos quedan fuera de su alcance. Bloquea cuando hay feature declarada y falta el artefacto:
+Gate de escritura (política de rutas, no de nombres):
 
-- fase 5 → exige `.scratch/<feature>/spec.md`
-- fase 6 → exige tickets `*.md` en `.scratch/<feature>/issues`
-- fase 1-4 y 7-10 → declarativas: el gate se cierra a mano
+- **Fases 1-6:** sólo `.scratch/<feature>/**`; en la fase 4 también `/tmp/opencode-proto-<feature>/**`.
+- **Fases 2-3:** además `CONTEXT.md` y `docs/adr/**`, y sólo si ya existían al `/flow start`.
+- **Fase 7 y siguientes:** código del proyecto, con `spec.md` escrito (y tickets en la fase 7). Escribir el
+  artefacto dentro de `.scratch/` siempre se permite: el gate nunca es un callejón sin salida.
 
-`patch` es todo-o-nada: se permite únicamente si **todos** los archivos del `patchText` son el artefacto
-exigido. Si además toca código del proyecto, o si no se puede parsear, bloquea. Escribir el propio artefacto
-siempre está permitido.
+Un `patch` es todo-o-nada sobre el conjunto permitido. Las rutas se canonicalizan: `..` y symlinks que escapan
+del proyecto se bloquean. Un artefacto vacío, oculto o llamado `README.md` no cierra el gate.
 
 Si el runtime no expone hooks de herramientas, el gate se desarma y lo dice al arrancar: nunca rompe la sesión.
 
