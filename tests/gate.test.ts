@@ -126,11 +126,22 @@ test("B: fase 7 bloquea código si falta el spec", () => {
   assert.equal(verdictFor(opts(root, 7), target).allow, false)
 })
 
-test("B: fase 7 bloquea código si hay spec pero faltan tickets", () => {
+// Punto 2: la fase 7 admite `tdd` sin tickets (flow.md), así que los tickets sólo son
+// requisito si el usuario se comprometió con ellos (`ticketsOpted: true`, que se marca al
+// pasar por la fase 6 o declararlo). Sin ese compromiso, exigirlos inventaría una fase 6
+// que nunca se recorrió.
+test("B: fase 7 bloquea código si faltan tickets SÓLO cuando el usuario los declaró", () => {
   const root = project()
   write(root, `.scratch/${FEATURE}/spec.md`, "# Spec\n")
   const target = writeTo(root, "src/index.ts")
-  assert.equal(verdictFor(opts(root, 7), target).allow, false)
+  assert.equal(verdictFor({ ...opts(root, 7), ticketsOpted: true }, target).allow, false)
+})
+
+test("B: fase 7 sin compromiso de tickets permite el camino tdd (sólo spec)", () => {
+  const root = project()
+  write(root, `.scratch/${FEATURE}/spec.md`, "# Spec\n")
+  const target = writeTo(root, "src/index.ts")
+  assert.equal(verdictFor(opts(root, 7), target).allow, true)
 })
 
 test("B: fase 7 permite código con spec y tickets", () => {

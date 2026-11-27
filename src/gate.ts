@@ -27,6 +27,12 @@ export type GateOptions = {
    * en fases 2-3: `CONTEXT.md` y `docs/adr` si estaban allí. Fuera de 2-3 no cuentan.
    */
   readonly allow?: string[]
+  /**
+   * `true` si el usuario va por `tdd` en la fase 7 sin tickets (`flow.md`: "implement-spec
+   * (con tickets) o tdd (sin tickets)"). Con esto, la fase 7 exige spec pero NO tickets:
+   * exigirlos sería inventar una fase 6 que no se recorrió.
+   */
+  readonly ticketsOpted?: boolean
 }
 
 /** Phases whose gate is file-verifiable and block auto-advance. */
@@ -173,10 +179,12 @@ export function verdictFor(options: GateOptions, target: WriteTarget): GateVerdi
 
   const allPermitted = targets.every(permitted)
 
-  // Fase >= 7: código del proyecto exige spec (y tickets, además, en la fase 7).
+  // Fase >= 7: código del proyecto exige spec. Los tickets sólo si el usuario pasó por la
+  // fase 6 (o los declaró): flow.md admite implementar con `tdd` sin tickets, y exigirlos
+  // sería inventar una fase que no se recorrió. Ver committedTickets().
   if (options.fase >= 7) {
     const specReady = satisfied(5, feature, options.projectRoot)
-    const ticketsReady = options.fase !== 7 || satisfied(6, feature, options.projectRoot)
+    const ticketsReady = committedTickets(options)
     if (specReady && ticketsReady) return { allow: true, reason: "spec presente: escritura del proyecto permitida" }
     // Aún sin spec: deja escribir dentro de .scratch/ para que se pueda crear el artefacto.
     if (allPermitted) return { allow: true, reason: "escritura dentro de .scratch/ antes de cerrar el gate" }
@@ -252,6 +260,18 @@ export function writeTarget(tool: string, input: unknown, base: string): WriteTa
 }
 
 /**
+ * ¿Hay que exigir tickets en la fase 7? Sólo si el usuario se comprometió con ellos:
+ * o bien pasó por la fase 6 (hay tickets en disco), o bien lo declaró (`ticketsOpted`).
+ * Si fue por `tdd` sin fase 6, no: flow.md permite ese camino.
+ */
+// Sin compromiso declarado, la fase 7 no inventa la obligación de tickets: flow.md admite
+// implementar con `tdd` sin pasar por la fase 6. Sólo con `ticketsOpted === true` (el
+// usuario pasó por la 6 o lo declaró) los tickets son requisito para escribir código.
+function committedTickets(options: GateOptions): boolean {
+  return options.ticketsOpted !== true || satisfied(6, options.feature, options.projectRoot)
+}
+
+/**
  * True when the artifact that closes `fase` already exists on disk.
  * Used by the auto-advance: seeing the artifact is the user's act; no manual gate needed.
  */
@@ -266,15 +286,27 @@ export function satisfied(fase: number, feature: string | undefined, root: strin
 }
 
 /** Explain the gate of the current phase, for `/flow status` and the start brief. */
-export function gateRequirement(fase: number, feature: string | undefined, root: string): string | undefined {
+export function gateRequirement(
+  fase: number,
+  feature: string | undefined,
+  root: string,
+  ticketsOpted?: boolean,
+): string | undefined {
   const entry = phase(fase)
   if (!entry) return undefined
   if (!feature) return `gate ${entry.gate ?? "ninguno"}: inactivo hasta declarar feature`
 
+  // Los tickets sólo son requisito si el usuario se comprometió con ellos (pasó por la 6 o
+  // lo declaró). Sin ese compromiso, la fase 7 va por `tdd` y el único requisito es el spec.
   if (fase >= 7) {
     const spec = satisfied(5, feature, root)
-    const tickets = fase !== 7 || satisfied(6, feature, root)
-    return `gate de escritura: ${spec && tickets ? "abierto (spec" + (fase === 7 ? " + tickets" : "") + " presente)" : "cerrado (falta " + (spec ? "tickets" : "spec") + ")"}`
+    const needsTickets = ticketsOpted === true
+    const ticketsReady = satisfied(6, feature, root)
+    if (spec && (!needsTickets || ticketsReady)) {
+      return `gate de escritura: abierto (spec presente${needsTickets ? " + tickets" : ""})`
+    }
+    const missing = !spec ? "spec" : "tickets"
+    return `gate de escritura: cerrado (falta ${missing})`
   }
   return `gate de escritura: whitelist .scratch/${feature}/` + (fase === 4 ? " + proto" : "") + (fase === 2 || fase === 3 ? " (+ CONTEXT.md/docs/adr si existían al start)" : "")
 }

@@ -17,6 +17,12 @@ export type FlowState = {
    * Sólo cuentan en fases 2-3; se guardan para que el gate no se abra a posteriori.
    */
   allow?: string[]
+  /**
+   * Puerta 7 sin tickets: la fase 7 acepta `tdd` sin pasar por la 6 (`flow.md`). Se marca
+   * cuando el usuario elige ese camino o cuando la deducción de fase salta la 6, para que
+   * el gate NO exija tickets que nunca prometió.
+   */
+  ticketsOpted?: boolean
 }
 
 export type ResolvedState = {
@@ -92,6 +98,15 @@ export async function commitAdvance(
     // Falla abierta: sin persistir seguimos con el estado avanzado en memoria.
     return { state: after, wrote: false }
   }
+}
+
+/**
+ * C7: aviso del auto-avance. El usuario no pidió este cambio —lo provocó escribir el
+ * artefacto— así que hay que decírselo y NO callárselo. Devuelve undefined si no avanzó.
+ */
+export function noticeAdvance(before: FlowState, after: FlowState): string | undefined {
+  if (after.fase <= before.fase) return undefined
+  return `[flow] auto-avance: fase ${before.fase} → ${after.fase} (artefacto detectado en disco). Usa /flow back para retroceder.`
 }
 /**
  * Busca el estado subiendo por la cadena de `parentID`.

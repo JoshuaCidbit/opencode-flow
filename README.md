@@ -12,11 +12,30 @@ remembering to load a skill.
 | `compaction` | A short addendum asking the summarizer to preserve the current phase, the pending gate, and the edit permission. |
 | `skills` (setup) | The bundled skills the phase map needs, registered in memory only. |
 | `tool` (setup) | The write gate: blocks writes the current phase does not allow (see below). |
+| Commands | `/flow …` publishes `opencode-flow.state` (phase, feature, gate) through `session.instructions`. Experimental, see below. |
 
 What is injected in `event.system` does **not** persist in message history, which is why the contract is
 re-rendered per request instead of relying on "the first turn".
 
+## Verificación pendiente (no afirmada como cierta)
+
+La **visibilidad del estado en la TUI no está comprobada en una sesión real**. Lo que hay verificado
+es el contrato del runtime, leyendo sus tipos en `@opencode/plugin` 2.4.2:
+
+- `ctx.session.instructions.entry.put/remove` existen y admiten `{ sessionID, key, value }`. El plugin
+  publica la key `opencode-flow.state` y la elimina en `/flow off`.
+- `ctx.session.synthetic` existe y admite `delivery`, cuyos únicos valores son `"steer"` (despierta la
+  ejecución) y `"queue"` (deja el mensaje en bandeja). Los comandos usan `steer`.
+- Todo esto cae a `ctx.session.prompt` y registra un aviso una sola vez si algo falla.
+
+Lo que **no** está verificado es el efecto en pantalla: que OpenCode muestre ese entry, y que `steer`
+provoque exactamente la interrupción esperada. Hasta que alguien lo confirme en una sesión real,
+trata la visibilidad como experimental; el resto del flow (fases, gate, contrato) no depende de ella.
+
 ## Install
+
+Requires **OpenCode 2.4.2 or newer**: below that the runtime does not expose what the plugin needs
+(`ctx.session.hook("tool")`, `session.synthetic`, `session.instructions`, `ctx.storage`).
 
 Add to `~/.config/opencode/opencode.json` (V2 key is `plugins`, paths must be directories and `~` is not expanded):
 
@@ -69,8 +88,14 @@ back to a minimal brief derived from `src/phases.ts`, and the gate and skills st
 
 ## Trigger, state and gate
 
-Phase and gate are persisted **per session** in `ctx.storage` (key `flow:<sessionID>`), so they survive
-compaction and are inherited by subagents through `parentID`. The transcript regex is only a fallback.
+Phase and gate are persisted **per session**, so they survive compaction and are inherited by subagents
+through `parentID`. The transcript regex is only a fallback. Two storage backends, so a lost session
+storage does not lose the flow:
+
+- `ctx.storage` per session (key `flow:<sessionID>`), the primary source.
+- `.flow-feature` in the project root, holding `{ slug, createdAt }`. That marker is how the plugin
+  notices an in-flight flow on a new session, deduces the earned phase from artifacts on disk
+  (spec present → resume at 6; tickets too → 7), and offers to resume exactly that feature.
 
 - **Inactive means silent.** With `active !== true` the plugin injects nothing into `context`/`generate` —
   no reminder, no contract. The flow is opt-in and stays invisible until you run `/flow`.

@@ -38,7 +38,7 @@ export function decide(input: GateInput): GateDecision {
 
   // 4. Criba barata terminada: TODO lo que queda es política de fases y de rutas, y eso
   // vive en verdictFor (gate.ts), no aquí. Devolvemos `evaluate` para que el llamador
-  // consulte el gate real. Hoy esto equivale a "no bloquees aún"; en 4e el bloqueo por
-  // ruta (.scratch/ en fases 1-6) lo decide verdictFor.
+  // consulte el gate real, que ya bloquea por ruta (.scratch/ en fases 1-6) y por artefacto
+  // (spec para escribir código desde la fase 7).
   return { kind: "evaluate" }
 }

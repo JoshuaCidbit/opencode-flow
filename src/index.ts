@@ -20,6 +20,7 @@ import { satisfied, gateRequirement, verdictFor, writeTarget } from "./gate.ts"
 import {
   advance,
   commitAdvance,
+  noticeAdvance,
   resolveState,
   stateKey,
   type FlowState,
@@ -29,6 +30,8 @@ import { makeLogger, OnceLog } from "./log.ts"
 import { decide, WRITING_TOOLS } from "./gate-decision.ts"
 import { renderFor } from "./contract.ts"
 import { provisionalSlug } from "./slug.ts"
+import { reply, syncStateEntry, offMessage } from "./visibility.ts"
+import { deducePhase, readFeatureMarker, writeFeatureMarker } from "./feature.ts"
 
 const LOG_PREFIX = "[opencode-flow]"
 
@@ -79,16 +82,62 @@ function unquote(value: string): string {
   return trimmed
 }
 
+// Skills ship with the plugin (like Superpowers): categories/<id>/SKILL.md.
+//
+// A9: admite frontmatter multilínea (`description: >-`, bloques `|` y listas). Un YAML
+// real no cabe en una sola línea; el parser anterior partía descripciones en cuanto
+// había un salto de línea. Sigue siendo deliberadamente mínimo: sólo lee `name` y
+// `description`, y prefiere no devolver nada antes que devolver basura.
 function frontmatter(text: string): { name?: string; description?: string } {
   const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/)
   if (!match) return {}
   const block = match[1]
-  const name = block.match(/^name:\s*(.+)$/m)?.[1]
-  const description = block.match(/^description:\s*(.+)$/m)?.[1]
-  return {
-    ...(name ? { name: unquote(name) } : {}),
-    ...(description ? { description: unquote(description) } : {}),
+
+  let name: string | undefined
+  let description: string | undefined
+
+  for (const raw of block.split(/\r?\n/)) {
+    // Sólo claves en la columna 1: dentro de un bloque multilínea la sangría manda.
+    if (/^\s/.test(raw)) continue
+    const separator = raw.indexOf(":")
+    if (separator === -1) continue
+    const key = raw.slice(0, separator).trim()
+    const value = raw.slice(separator + 1).trim()
+    if (key !== "name" && key !== "description") continue
+
+    const unquoted = unquote(value)
+    // Indicador de bloque (>, >-, |, |-): el contenido son las líneas siguientes.
+    if (/^[>|][-+]?$/.test(unquoted)) {
+      const body = collectBlock(block, raw)
+      if (body) {
+        if (key === "name") name = body
+        else description = body
+      }
+      continue
+    }
+    if (unquoted && key === "name" && name === undefined) name = unquoted
+    if (unquoted && key === "description" && description === undefined) description = unquoted
   }
+
+  return {
+    ...(name ? { name } : {}),
+    ...(description ? { description } : {}),
+  }
+}
+
+/** Junta las líneas sangradas que siguen a un indicador de bloque. */
+function collectBlock(block: string, header: string): string | undefined {
+  const lines = block.split(/\r?\n/)
+  const start = lines.indexOf(header)
+  if (start === -1) return undefined
+  const body: string[] = []
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() === "") break
+    if (!/^\s/.test(line)) break
+    body.push(line.trim())
+  }
+  const joined = body.join(" ").replace(/\s+/g, " ").trim()
+  return joined || undefined
 }
 
 // Skills ship with the plugin (like Superpowers): categories/<id>/SKILL.md.
@@ -136,18 +185,42 @@ function readBundledSkills(root: string): BundledSkill[] {
 }
 
 // Only adds what is absent: never shadows the user's own edits or `npx skills` installs.
-function addMissingSkills(editor: SkillEditorLike, bundled: BundledSkill[]): string[] {
+// Devuelve los ids añadidos; `ceded` son los que ya existían (no se tocan).
+export function addMissingSkills(
+  editor: SkillEditorLike,
+  bundled: BundledSkill[],
+): { added: string[]; ceded: string[] } {
   const existing = new Set(editor.list().map((skill) => String(skill.id)))
   const added: string[] = []
+  const ceded: string[] = []
   for (const skill of bundled) {
-    if (existing.has(skill.id)) continue
+    if (existing.has(skill.id)) {
+      ceded.push(skill.id)
+      continue
+    }
     editor.add(skill)
+    // A9: se añade al conjunto EN EL BUCLE. Si dos empaquetados compartieran id, el
+    // segundo se cedería en vez de registrar un duplicado.
+    existing.add(skill.id)
     added.push(skill.id)
   }
-  return added
+  return { added, ceded }
 }
 
-export { addMissingSkills, loadContract, readBundledSkills }
+export { loadContract, readBundledSkills }
+
+/** Gate B: rutas escribibles en fases 2-3 SÓLO si existían al tomar la foto. */
+const ALLOWABLE_PATHS = ["CONTEXT.md", "docs/adr"]
+
+/**
+ * Gate B: foto de las rutas heredables que EXISTEN ahora.
+ * Se toma en cada punto de partida — `/flow start`, `/flow resume` y `/flow back` — para que
+ * la lista refleje la realidad de ESE momento. Dentro de una misma ejecución queda
+ * congelada en `state.allow`: crear `CONTEXT.md` más tarde no abre el gate.
+ */
+export function snapshotAllow(projectRoot: string): string[] {
+  return ALLOWABLE_PATHS.filter((name) => existsSync(join(projectRoot, name)))
+}
 
 // The narration line this contract asks for, e.g. "[flow] fase 5 · gate pendiente: evidencia".
 const STATE_RE = /\[flow\]\s*fase\s*(\d+)\s*·\s*gate pendiente:\s*([^\n]+)/gi
@@ -318,6 +391,14 @@ export default Plugin.define({
       if (!resolved || !storage) return resolved ? { ...resolved, wrote: false } : undefined
       const next = advance(resolved.state, (fase, feature) => satisfied(fase, feature, projectRoot), LAST_PHASE)
       const committed = await commitAdvance(storage, resolved.ownerID, resolved.state, next)
+      // Punto (b): el entry visible se refresca en CADA cambio de estado, incluido el
+      // auto-avance. Si el runtime no lo expone, syncStateEntry devuelve false y seguimos.
+      if (committed.wrote) {
+        await syncStateEntry(ctx.session as never, resolved.ownerID, committed.state)
+        // Punto (g): si la fase subió sola (escribió el artefacto), hay que decirlo.
+        const notice = noticeAdvance(resolved.state, committed.state)
+        if (notice) log.once(`advance:${resolved.ownerID}`, notice)
+      }
       return { state: committed.state, ownerID: resolved.ownerID, wrote: committed.wrote }
     }
 
@@ -348,13 +429,19 @@ export default Plugin.define({
           case "bad-gate":
             await ctx.session.prompt({ sessionID: input.sessionID, text: badGateMessage(parsed.name) })
             return
-          case "off":
-            await writeState(owner, { fase: previous?.fase ?? 1, ...(previous?.gate ? { gate: previous.gate } : {}), ...(previous?.feature ? { feature: previous.feature } : {}), ...inheritedAllow, active: false })
-            await ctx.session.prompt({
-              sessionID: input.sessionID,
-              text: `${narration(previous?.fase ?? 1, "flow desactivado")}\nFlow desactivado para esta sesión. Reactiva con /flow start [N] [slug].`,
-            })
+          case "off": {
+            const offState = { fase: previous?.fase ?? 1, ...(previous?.gate ? { gate: previous.gate } : {}), ...(previous?.feature ? { feature: previous.feature } : {}), ...inheritedAllow, active: false }
+            await writeState(owner, offState)
+            // Punto (b): el entry desaparece al apagar. Si el runtime no expone la API,
+            // seguimos: el silencio del flow ya es la señal.
+            await syncStateEntry(ctx.session as never, input.sessionID, undefined)
+            await reply(
+              ctx.session as never,
+              input.sessionID,
+              offMessage(previous),
+            )
             return
+          }
           case "status": {
             if (!previous || !previous.active) {
               await ctx.session.prompt({ sessionID: input.sessionID, text: reminder() })
@@ -395,12 +482,16 @@ export default Plugin.define({
             const gate = entry?.gate
             // Gate B: se congela lo que EXISTÍA ahora. Si se crea CONTEXT.md después,
             // no se cuela: el gate no se abre a posteriori.
-            const allow = ["CONTEXT.md", "docs/adr"].filter((name) => existsSync(join(projectRoot, name)))
+            const allow = snapshotAllow(projectRoot)
             // C1: sin slug explícito se usa el provisional del sessionID. Así el gate
             // funciona desde el primer turno sin obligar a bautizar la feature.
             const explicit = parsed.feature
-            const feature = explicit ?? previous?.feature ?? provisionalSlug(input.sessionID)
-            const provisional = !explicit && (previous?.slugProvisional ?? !previous?.feature)
+            // Punto (e): si no hay estado ni slug explícito pero hay UN marcador en disco,
+            // se OFRECE retomarlo (adoptando el slug) en vez de arrancar una feature nueva
+            // inventada. Es la única huella de un flow anterior en este proyecto.
+            const marker = !explicit && !previous ? readFeatureMarker(projectRoot) : undefined
+            const feature = explicit ?? previous?.feature ?? marker?.slug ?? provisionalSlug(input.sessionID)
+            const provisional = !explicit && !previous?.feature && !marker
             await writeState(owner, {
               fase: parsed.fase,
               ...(gate ? { gate } : {}),
@@ -409,15 +500,20 @@ export default Plugin.define({
               ...(allow.length > 0 ? { allow } : {}),
               active: true,
             })
-            await ctx.session.prompt({
-              sessionID: input.sessionID,
+            // Punto (e): el marcador en la raíz deja huella en disco para retomar sin storage.
+            writeFeatureMarker(projectRoot, feature)
+            await syncStateEntry(ctx.session as never, input.sessionID, { fase: parsed.fase, ...(gate ? { gate } : {}), feature, active: true })
+            const offer = marker ? `[flow] he encontrado .flow-feature: retomo "${marker.slug}" (creado ${marker.createdAt}).\n` : ""
+            await reply(
+              ctx.session as never,
+              input.sessionID,
               // Regla 3: es el ÚNICO fallo que se comunica al usuario, y sólo tras su
               // acto explícito (/flow start). Si el runtime no permite el hook, el flow
               // sólo guía: no debe fingir que bloquea.
-              text: gateAvailable
+              `${offer}${gateAvailable
                 ? phaseBrief(parsed.fase, feature)
-                : `${phaseBrief(parsed.fase, feature)}\n\nAVISO: gate de escritura no disponible en este runtime: el flow solo guía, no bloquea.`,
-            })
+                : `${phaseBrief(parsed.fase, feature)}\n\nAVISO: gate de escritura no disponible en este runtime: el flow solo guía, no bloquea.`}`,
+            )
             return
           }
           case "next": {
@@ -427,11 +523,15 @@ export default Plugin.define({
             }
             const next = Math.min(previous.fase + 1, LAST_PHASE)
             const entry = phase(next)
+            // Puerta 7: si se pasa por la 6 (o se llega a la 7 viniendo de ella), los
+            // tickets SÍ son requisito: el usuario eligió el camino con tickets.
+            const opted = previous.ticketsOpted ?? previous.fase >= 6
             await writeState(owner, {
               fase: next,
               ...(entry?.gate ? { gate: entry.gate } : {}),
               ...(previous.feature ? { feature: previous.feature } : {}),
               ...(previous.slugProvisional ? { slugProvisional: true } : {}),
+              ...(opted ? { ticketsOpted: true } : {}),
               ...inheritedAllow,
               active: true,
             })
@@ -451,12 +551,13 @@ export default Plugin.define({
             }
             const target = Math.max(FIRST_PHASE, previous.fase - parsed.steps)
             const entry = phase(target)
+            // Punto 4: retroceder también es un nuevo punto de partida: se recalcula la foto.
             await writeState(owner, {
               fase: target,
               ...(entry?.gate ? { gate: entry.gate } : {}),
               ...(previous.feature ? { feature: previous.feature } : {}),
               ...(previous.slugProvisional ? { slugProvisional: true } : {}),
-              ...inheritedAllow,
+              ...(snapshotAllow(projectRoot).length > 0 ? { allow: snapshotAllow(projectRoot) } : {}),
               active: true,
             })
             await ctx.session.prompt({
@@ -508,13 +609,17 @@ export default Plugin.define({
             return
           }
           case "resume": {
-            const feature = parsed.feature ?? previous?.feature ?? provisionalSlug(input.sessionID)
-            const provisional = !parsed.feature && (previous?.slugProvisional ?? !previous?.feature)
-            const fase = previous?.fase ?? FIRST_PHASE
+            // Punto (e): sin sesión previa, se mira el marcador `.flow-feature` del proyecto
+            // y la fase se DEDUCE de los artefactos en disco en vez de adivinarse.
+            const marker = parsed.feature ? undefined : readFeatureMarker(projectRoot)
+            const feature = parsed.feature ?? previous?.feature ?? marker?.slug ?? provisionalSlug(input.sessionID)
+            const provisional = !parsed.feature && !previous?.feature && !marker
+            const fase = previous?.fase ?? (feature ? deducePhase(projectRoot, feature) : FIRST_PHASE)
             const entry = phase(fase)
-            const allow =
-              previous?.allow ??
-              ["CONTEXT.md", "docs/adr"].filter((name) => existsSync(join(projectRoot, name)))
+            // Punto 4: el resume es un NUEVO punto de partida, así que la foto se recalcula.
+            // Si se reutilizara `previous.allow`, un flow retomado tras crear CONTEXT.md
+            // arrastraría una foto vieja y el gate quedaría cerrado sin motivo.
+            const allow = snapshotAllow(projectRoot)
             await writeState(owner, {
               fase,
               ...(entry?.gate ? { gate: entry.gate } : {}),
@@ -523,10 +628,12 @@ export default Plugin.define({
               ...(allow.length > 0 ? { allow } : {}),
               active: true,
             })
-            await ctx.session.prompt({
-              sessionID: input.sessionID,
-              text: `[flow] reactivado en fase ${fase} · feature ${feature}\n${phaseBrief(fase, feature)}`,
-            })
+            writeFeatureMarker(projectRoot, feature)
+            await reply(
+              ctx.session as never,
+              input.sessionID,
+              `${marker && !parsed.feature && !previous?.feature ? `[flow] retomo la feature marcada: ${feature} (fase ${fase} deducida de los artefactos)\n` : ""}[flow] reactivado en fase ${fase} · feature ${feature}\n${phaseBrief(fase, feature)}`,
+            )
             return
           }
         }
@@ -544,12 +651,12 @@ export default Plugin.define({
     // petición (lo inyectado en system NO persiste en el historial).
     // Inactive: total silence. Not even a reminder: the flow is opt-in and stays invisible.
     //
-    // A6 (verificado en runtime 2.4.2, sonda en /tmp): `context` y `generate` NO co-disparan
+    // A6 (verificado en runtime 2.4.2 contra sus tipos): `context` y `generate` NO co-disparan
     // en la misma petición; cada uno corresponde a un tipo de petición distinto, y
     // `compaction` sólo se dispara al compactar. Por eso no hay doble inyección por turno.
     // Aun así, si un runtime futuro los disparara ambos, el daño sería texto repetido, no
-    // estado corrupto: el hook es de sólo lectura de estado. La dedup fina (marcador en el
-    // texto) se pospone a 4e, donde el gate cambia igualmente.
+    // estado corrupto: el hook es de sólo lectura de estado. No hay dedup por marcador: se
+    // considera LIMITACIÓN CONOCIDA (ver CHANGELOG) mientras no se observe el co-disparo.
     for (const kind of ["context", "generate"] as const) {
       registrations.push(
         await ctx.session.hook(kind, async (event) => {
@@ -646,7 +753,18 @@ export default Plugin.define({
     if (bundled.length > 0 && ctx.skill && typeof ctx.skill.transform === "function") {
       registrations.push(
         await ctx.skill.transform((editor) => {
-          addMissingSkills(editor as unknown as SkillEditorLike, bundled)
+          const { added, ceded } = addMissingSkills(editor as unknown as SkillEditorLike, bundled)
+          // A9: registrar los ids cedidos hace visible por qué NO se instaló una skill
+          // empaquetada. Silenciarlo haría creer que el bundle está roto.
+          if (added.length > 0) {
+            log.debug("skills-added", `skills empaquetadas registradas (${added.length}): ${added.join(", ")}`)
+          }
+          if (ceded.length > 0) {
+            log.debug(
+              "skills-ceded",
+              `skills NO registradas porque ya existían (${ceded.length}): ${ceded.join(", ")}. Ganó la copia del usuario.`,
+            )
+          }
         }),
       )
     }
