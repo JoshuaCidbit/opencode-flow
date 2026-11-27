@@ -112,9 +112,9 @@ Si ya trae el contexto, confírmalo en una línea y escribe `understanding.md`.
 - Gate: ninguno
 - Cierra con: `.scratch/<feature>/glossary.md` aprobado por el usuario
 
-Lee `understanding.md` y fija el vocabulario del diseño: un término, una definición, un nombre. Reutiliza los del código y la documentación; no inventes sinónimos. Las decisiones no obvias van como ADR corta (contexto, decisión, consecuencias). Si dos términos chocan, una pregunta por turno con tu recomendación.
+Lee `understanding.md` y fija el vocabulario del diseño: un término, una definición, un nombre. Reutiliza los del código y la documentación; no inventes sinónimos. Si dos términos chocan, una pregunta por turno con tu recomendación.
 
-Escribe siempre `.scratch/<feature>/glossary.md`, con las ADR cortas en una sección "Decisiones". Sólo si `docs/adr/` ya existía al arrancar pueden ir ahí, con referencia desde `glossary.md`; si no existía, todo va en `glossary.md`.
+Las decisiones no obvias van como ADR corta (contexto, decisión, consecuencias) en una sección "Decisiones" dentro de `.scratch/<feature>/glossary.md`, salvo que `docs/adr/` ya existiera al arrancar (entonces pueden ir ahí, con referencia desde `glossary.md`). Escribe siempre `glossary.md`; si `CONTEXT.md` o `docs/adr/` existían al arrancar puedes añadir ahí lo aprobado y dejar un resumen con referencia; si no existían, no los crees y todo va en `glossary.md`.
 
 ## Fase 3 — Diseño de módulos
 
@@ -132,7 +132,7 @@ Lee `understanding.md` y `glossary.md` y usa sus términos tal cual; si un nombr
 - Gate: ninguno
 - Cierra con: respuesta a una pregunta de diseño anotada en `design.md`
 
-Opcional: el usuario puede saltarla con `/flow next`. Prototipo desechable en `/tmp/opencode-proto-<feature>/`, nunca dentro del proyecto y sin commitear. Responde UNA pregunta de diseño concreta, anota la respuesta en una sección "Sondeo" de `design.md` y para.
+Opcional: el usuario puede saltarla con `/flow next` sin justificarse. Prototipo desechable en `/tmp/opencode-proto-<feature>/`, nunca dentro del proyecto ni commiteado. Responde UNA pregunta de diseño concreta, anota la respuesta en una sección "Sondeo" de `design.md` y para.
 
 ## Fase 5 — Especificar
 

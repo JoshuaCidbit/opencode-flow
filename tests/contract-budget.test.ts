@@ -256,8 +256,9 @@ test("fase 2: las ADR van en glossary.md salvo que docs/adr ya existiera", () =>
   const body = parseSections(CONTRACT).phases.get(2) ?? ""
   assert.match(body, /secci[óo]n "Decisiones"/, "las ADR tienen un sitio dentro de glossary.md")
   assert.match(body, /docs\/adr\//, "menciona la excepción de docs/adr")
+  assert.match(body, /CONTEXT\.md/, "menciona la excepción de CONTEXT.md")
+  assert.match(body, /no los crees/, "prohíbe crear CONTEXT.md o docs/adr/ si no existían")
   assert.ok(!body.includes("propón el contenido"), "si no existía, no se propone: todo va en glossary.md")
-  assert.ok(!body.includes("no los crees"), "ídem")
 })
 
 // "Dos reglas de uso" con unItem numerado "4." sería un contrato que se contradice solo: el

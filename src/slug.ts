@@ -7,15 +7,14 @@
 // Por qué el provisional usa el sessionID y no el título de sesión: medido en 2.4.2, ni
 // ctx.session.get ni session.list devuelven `title` en sesiones nuevas. Verificado en sonda A7.
 
+/** Longitud máxima de un slug de feature (compartida por slugify, isValidSlug y el presupuesto del contrato). */
+export const MAX_SLUG = 60
+
 /** Longitud del sufijo provisional tomado del sessionID. */
 export const PROVISIONAL_SUFFIX_LENGTH = 6
 
 const PROVISIONAL_PREFIX = "flow-"
 
-/**
- * Convierte texto libre en un slug kebab-case válido.
- * Devuelve undefined si la descripción no produce ningún carácter válido.
- */
 // Nombres reservados de Windows: no pueden usarse como nombre de fichero/directorio.
 // Como .scratch/<slug>/ se crea en disco, un slug así rompería en Windows.
 const RESERVED_WINDOWS = new Set([
@@ -33,12 +32,12 @@ function baseSlug(description: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .replace(/-{2,}/g, "-")
-    .slice(0, 60)
+    .slice(0, MAX_SLUG)
     .replace(/-+$/g, "")
 }
 
-/** Forma canónica de un slug de feature: minúsculas, dígitos y guiones, 1-40 caracteres. */
-const SLUG_RE = /^[a-z0-9-]{1,40}$/
+/** Forma canónica de un slug de feature: minúsculas, dígitos y guiones, 1-MAX_SLUG caracteres. */
+const SLUG_RE = new RegExp(`^[a-z0-9-]{1,${MAX_SLUG}}$`)
 
 /** `true` si el valor puede usarse tal cual como nombre de feature (no normaliza, valida). */
 export function isValidSlug(value: string): boolean {

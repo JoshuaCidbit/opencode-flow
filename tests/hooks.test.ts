@@ -12,6 +12,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import plugin from "../src/index.ts"
+import { MAX_SLUG } from "../src/slug.ts"
 
 type HookName = string
 type Hook = (event: unknown) => Promise<unknown>
@@ -352,23 +353,18 @@ test("P1 (cableado): compaction inyecta el addendum con la fase y la feature rea
   assert.ok(!injected.includes("<feature>"), "compaction: queda un placeholder <feature> literal")
 })
 
-// Presupuesto por el CAMINO REAL: el hook `context`, no `renderFor`. El slug de 60 no lo acepta
-// `isValidSlug` (tope 40 hoy, P2/P3 lo sube), así que el estado se fuerza directo en storage:
-// no es un atajo por comodidad, es que /flow start 1 <slug-60> respondería "ayuda".
-test("P1 (presupuesto): el hook context con slug de 60 inyecta <= 7000 B y cero <feature>", async () => {
-  const root = mkdtempSync(join(tmpdir(), "flow-hook-slug60-"))
-  // 60 = corte de `baseSlug` en slug.ts, el peor caso alcanzable. Constante local (no MAX_SLUG
-  // de slug.ts, que llega con P2/P3) para no afirmar una coherencia que hoy no existe.
-  const MAX_SLUG_TEST = 60
-  const longSlug = "a".repeat(MAX_SLUG_TEST)
-  const h = await harness({
-    root,
-    states: { s1: { fase: 1, feature: longSlug, slugProvisional: false, active: true } },
+// Presupuesto por el CAMINO REAL: los hooks `context` y `generate` con `MAX_SLUG` de `slug.ts`.
+for (const kind of ["context", "generate"] as const) {
+  test(`P1 (presupuesto): el hook ${kind} con slug de ${MAX_SLUG} inyecta <= 7000 B y cero <feature>`, async () => {
+    const root = mkdtempSync(join(tmpdir(), `flow-hook-${kind}-slug60-`))
+    const longSlug = "a".repeat(MAX_SLUG)
+    const h = await harness({ root })
+    await h.run("s1", `start 1 ${longSlug}`)
+    const injected = kind === "context" ? await h.context("s1") : await h.generate("s1")
+    assert.ok(injected, `el hook ${kind} no inyectó nada`)
+    const bytes = Buffer.byteLength(injected, "utf8")
+    assert.ok(bytes <= 7000, `el hook ${kind} inyecta ${bytes} bytes con slug de ${MAX_SLUG} (techo 7000)`)
+    assert.ok(!injected.includes("<feature>"), "quedan placeholders sin resolver")
+    assert.ok(injected.includes(`.scratch/${longSlug}/understanding.md`), `la ruta lleva el slug de ${MAX_SLUG}`)
   })
-  const injected = await h.context("s1")
-  assert.ok(injected, "el hook no inyectó nada")
-  const bytes = Buffer.byteLength(injected, "utf8")
-  assert.ok(bytes <= 7000, `el hook inyecta ${bytes} bytes con slug de 60 (techo 7000)`)
-  assert.ok(!injected.includes("<feature>"), "quedan placeholders sin resolver")
-  assert.ok(injected.includes(`.scratch/${longSlug}/understanding.md`), "la ruta lleva el slug de 60")
-})
+}

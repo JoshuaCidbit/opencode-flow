@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { PROVISIONAL_SUFFIX_LENGTH, provisionalSlug, slugify } from "../src/slug.ts"
+import { MAX_SLUG, PROVISIONAL_SUFFIX_LENGTH, isValidSlug, provisionalSlug, slugify } from "../src/slug.ts"
 
 // ID con el formato real observado en 2.4.2.
 const REAL_SESSION_ID = "ses_de5eb36c3ffeVWceT42N0nD2FG"
@@ -40,12 +40,12 @@ test("slugify: entrada que se vacía tras normalizar devuelve undefined", () => 
   assert.equal(slugify("***"), undefined)
   assert.equal(slugify(""), undefined)
   assert.equal(slugify("🎉🚀"), undefined) // emojis
-  assert.equal(slugify("日本語"), undefined) // alfabeto no latino
+  assert.equal(slugify("тест"), undefined) // alfabeto no latino
   assert.equal(slugify("!!! ??? ---"), undefined)
 })
 
 test("slugify: nunca devuelve cadena vacía", () => {
-  for (const input of ["", "***", "🎉", "日本語", "   "]) {
+  for (const input of ["", "***", "🎉", "اختبار", "   "]) {
     const slug = slugify(input)
     assert.ok(slug === undefined || slug.length > 0, `esperado undefined o no vacío para ${JSON.stringify(input)}`)
   }
@@ -66,15 +66,26 @@ test("slugify: idempotente", () => {
   assert.equal(slugify(once!), once)
 })
 
-test("slugify: trunca a 60 sin dejar guión final", () => {
+test("slugify: trunca a MAX_SLUG sin dejar guión final", () => {
+  assert.equal(MAX_SLUG, 60)
   const slug = slugify("a".repeat(200))
-  assert.equal(slug, "a".repeat(60))
-  assert.equal(slug!.length, 60)
+  assert.equal(slug, "a".repeat(MAX_SLUG))
+  assert.equal(slug!.length, MAX_SLUG)
   assert.ok(!slug!.endsWith("-"))
 
-  const withDash = slugify(`${"b".repeat(59)} z`)
-  assert.ok(withDash!.length <= 60)
+  const withDash = slugify(`${"b".repeat(MAX_SLUG - 1)} z`)
+  assert.ok(withDash!.length <= MAX_SLUG)
   assert.ok(!withDash!.endsWith("-"))
+})
+
+test("isValidSlug: acepta hasta MAX_SLUG y rechaza longitud mayor", () => {
+  assert.equal(isValidSlug("a".repeat(MAX_SLUG)), true)
+  assert.equal(isValidSlug("a".repeat(MAX_SLUG + 1)), false)
+  assert.equal(isValidSlug(""), false)
+  assert.equal(isValidSlug("-abc"), false)
+  assert.equal(isValidSlug("abc-"), false)
+  assert.equal(isValidSlug("a--b"), false)
+  assert.equal(isValidSlug("a/b"), false)
 })
 
 test("slugify: kebab-case básico, acentos y dígitos", () => {

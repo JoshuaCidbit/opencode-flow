@@ -1,5 +1,5 @@
 // Single source of truth for the phase map. `flow.md` stays prose and is updated by hand.
-import { isValidSlug, slugify } from "./slug.ts"
+import { MAX_SLUG, isValidSlug, slugify } from "./slug.ts"
 import { scopeToFeature } from "./contract.ts"
 //
 // Rule: phase numbers here must match the table in `flow.md`. Nothing else reads the prose.
@@ -150,7 +150,7 @@ export function parseCommand(text: string): Parsed {
     if (n === undefined) return { kind: "help", reason: `"${rest[0]}" no es una fase entre ${FIRST_PHASE} y ${LAST_PHASE}` }
     const slug = rest[1]
     if (slug === undefined) return { kind: "start", fase: n }
-    if (!isValidSlug(slug)) return { kind: "help", reason: `slug "${slug}" inválido: usa minúsculas, dígitos y guiones (1-40), sin . / \\` }
+    if (!isValidSlug(slug)) return { kind: "help", reason: `slug "${slug}" inválido: usa minúsculas, dígitos y guiones (1-${MAX_SLUG}), sin . / \\` }
     return { kind: "start", fase: n, feature: slug }
   }
 
@@ -167,14 +167,14 @@ export function parseCommand(text: string): Parsed {
   if (sub === "rename") {
     const slug = rest[0]
     if (!slug) return { kind: "help", reason: "falta el slug nuevo: /flow rename <slug>" }
-    if (!isValidSlug(slug)) return { kind: "help", reason: `slug "${slug}" inválido: usa minúsculas, dígitos y guiones (1-40), sin . / \\` }
+    if (!isValidSlug(slug)) return { kind: "help", reason: `slug "${slug}" inválido: usa minúsculas, dígitos y guiones (1-${MAX_SLUG}), sin . / \\` }
     return { kind: "rename", feature: slug }
   }
 
   if (sub === "resume") {
     const slug = rest[0]
     if (slug === undefined) return { kind: "resume" }
-    if (!isValidSlug(slug)) return { kind: "help", reason: `slug "${slug}" inválido: usa minúsculas, dígitos y guiones (1-40), sin . / \\` }
+    if (!isValidSlug(slug)) return { kind: "help", reason: `slug "${slug}" inválido: usa minúsculas, dígitos y guiones (1-${MAX_SLUG}), sin . / \\` }
     return { kind: "resume", feature: slug }
   }
 
@@ -251,7 +251,7 @@ export function phaseBrief(fase: number, feature?: string): string {
     "",
     `Fase ${entry.n} · ${entry.name}`,
     `Skill a cargar: ${entry.skill}`,
-    `Cierra con: ${entry.closes}`,
+    `Cierra con: ${scopeToFeature(entry.closes, feature)}`,
   ]
   if (feature) lines.push(`Feature declarada: ${feature} (raíz de artefactos: .scratch/${feature}/)`)
   else if (entry.blocks) lines.push(`Artefacto exigido: falta declarar feature con /flow start ${entry.n} <slug>.`)
