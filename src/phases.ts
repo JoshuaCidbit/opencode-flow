@@ -103,8 +103,62 @@ export function stateLine(state: { fase: number; active: boolean; feature?: stri
 // ---- subcommand parsing ----------------------------------------------------
 // Tolerant by design: anything unrecognised degrades to help. It never throws.
 
+// Subcomandos conocidos. De aquí salen la ayuda y las sugerencias por parecido, así que
+// añadir un subcomando obliga a tocar este único sitio.
+const SUBCOMMANDS: readonly string[] = [
+  "help", "off", "status", "gate", "start", "next", "back", "rename", "resume",
+]
+
+/** Normaliza para comparar: minúsculas, sin acentos y sin guiones ni barras.
+ *  `státus`, `STATUS` y `status` son el mismo subcomando para quien teclea rápido. */
+export function foldCommand(raw: string): string {
+  return raw
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[-_/\\]/g, "")
+}
+
+/** Distancia de edición (Levenshtein) acotada: si supera `max`, devuelve `max + 1`.
+ *  El corte evita rellenar la matriz completa para palabras que no se parecen en nada. */
+function editDistance(a: string, b: string, max: number): number {
+  if (a === b) return 0
+  if (Math.abs(a.length - b.length) > max) return max + 1
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i)
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i]
+    let bestInRow = i
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      const value = Math.min(row[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost)
+      row.push(value)
+      if (value < bestInRow) bestInRow = value
+    }
+    if (bestInRow > max) return max + 1
+    prev = row
+  }
+  return prev[b.length]
+}
+
+/** Subcomando más parecido, si está a distancia <= 2. `undefined` si no hay ninguno cercano:
+ *  sugerir cualquier cosa convierte la ayuda en ruido. */
+export function suggestSubcommand(raw: string): string | undefined {
+  const target = foldCommand(raw)
+  if (!target) return undefined
+  let best: string | undefined
+  let bestDistance = Number.POSITIVE_INFINITY
+  for (const candidate of SUBCOMMANDS) {
+    const distance = editDistance(target, foldCommand(candidate), 2)
+    if (distance <= 2 && distance < bestDistance) {
+      best = candidate
+      bestDistance = distance
+    }
+  }
+  return best
+}
+
 export type Parsed =
-  | { kind: "help"; reason?: string }
+  | { kind: "help"; reason?: string; suggestion?: string }
   | { kind: "start"; fase: PhaseNumber; feature?: string }
   | { kind: "status" }
   | { kind: "gate"; gate: GateName }
@@ -124,13 +178,18 @@ function toPhase(raw: string): PhaseNumber | undefined {
 /**
  * Parse what the user typed after `/flow` (or `/workflow`).
  * A bare invocation means "start at 1", so the trigger stays a user act, not a model decision.
+ *
+ * `active` distingue dos situaciones que antes compartían rama: con el flow YA activo, cualquier
+ * texto raro es un subcomando mal escrito (ayuda); con el flow inactivo puede que el usuario esté
+ * describiendo la feature que quiere empezar, así que una sola palabra desconocida es ayuda y una
+ * descripción libre exige al menos dos.
  */
-export function parseCommand(text: string): Parsed {
+export function parseCommand(text: string, options: { active?: boolean } = {}): Parsed {
   const parts = text.trim().split(/\s+/).filter(Boolean)
   if (parts.length === 0) return { kind: "start", fase: FIRST_PHASE }
 
   const [head, ...rest] = parts
-  const sub = head.toLowerCase()
+  const sub = foldCommand(head)
 
   if (sub === "help") return { kind: "help" }
   if (sub === "off") return { kind: "off" }
@@ -180,11 +239,34 @@ export function parseCommand(text: string): Parsed {
 
   // C1: `/flow <descripción>` arranca con un slug derivado del texto. Sin argumentos
   // (`/flow`), index.ts usa el slug provisional del sessionID.
+  //
+  // Con el flow YA activo, un texto que empieza por una palabra desconocida NO es una
+  // descripción: es un subcomando mal escrito. Se ayuda y se sugiere el parecido.
+  if (options.active) {
+    return {
+      kind: "help",
+      reason: helpReason(head),
+      suggestion: suggestSubcommand(head),
+    }
+  }
+  // Con el flow inactivo, una sola palabra desconocida tampoco es descripción (es casi
+  // siempre un subcomando mal tecleado). Hacen falta dos palabras para describir.
+  if (parts.length < 2) {
+    return { kind: "help", reason: helpReason(head), suggestion: suggestSubcommand(head) }
+  }
   const feature = slugify(text)
   if (!feature) {
-    return { kind: "help", reason: `subcomando desconocido "${head}"; si era una descripción, no pude derivar un slug de ella` }
+    return { kind: "help", reason: `no pude derivar un slug de "${text}"`, suggestion: suggestSubcommand(head) }
   }
   return { kind: "start", fase: FIRST_PHASE, feature }
+}
+
+/** Motivo de ayuda para un texto no reconocido, con la sugerencia si la hay. */
+function helpReason(head: string): string {
+  const suggestion = suggestSubcommand(head)
+  return suggestion
+    ? `"${head}" no es un subcomando. ¿Querías decir "/flow ${suggestion}"?`
+    : `"${head}" no es un subcomando`
 }
 
 // ---- rendered output -------------------------------------------------------
@@ -193,7 +275,7 @@ function summaryLine(entry: Phase): string {
   return `${entry.n} ${entry.name} — ${entry.skill} → cierra con: ${entry.closes}`
 }
 
-export function help(): string {
+export function help(options: { active?: boolean } = {}): string {
   return [
     "Uso: /flow <subcomando>",
     "  (sin argumentos)      arranca en fase 1 con slug provisional (`flow-<sesión>`)",
@@ -210,6 +292,9 @@ export function help(): string {
     "",
     `Gates válidos: ${VALID_GATES.join(", ")}`,
     "Alias: /workflow …",
+    // P3: con el flow ya en marcha, describir una feature NUEVA necesita `start`; quien acaba
+    // de leer la ayuda por un subcomando mal escrito es justo quien lo va a intentar.
+    ...(options.active ? ["", "Para empezar OTRA feature: /flow start <descripción>", "El flow ya está activo: una descripción suelta no arranca otra."] : []),
   ].join("\n")
 }
 

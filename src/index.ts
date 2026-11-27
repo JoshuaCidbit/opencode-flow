@@ -414,13 +414,16 @@ export default Plugin.define({
             : typeof (root as { text?: unknown } | undefined)?.text === "string"
               ? (root as { text: string }).text
               : ""
-        const parsed = parseCommand(text ?? "")
         // A5: lectura pura -> avance explícito. La fase ya viene actualizada.
         const resolved = await readState(input.sessionID)
         const moved = await advanceState(resolved)
         // A3: escrituras al dueño; el hijo nunca es dueño del estado.
         const owner = moved?.ownerID ?? input.sessionID
         const previous = moved?.state
+        // P3: `active` decide si un texto raro es un subcomando mal escrito (ayuda) o la
+        // descripción de una feature nueva. Se lee del estado YA resuelto; la rama de ayuda
+        // no escribe nada, así que esta lectura no es un efecto.
+        const parsed = parseCommand(text ?? "", { active: previous?.active === true })
         // Gate B: lo que existía al hacer `/flow start`; se arrastra en cada transición.
         const inheritedAllow = previous?.allow ? { allow: previous.allow } : {}
 
@@ -436,9 +439,13 @@ export default Plugin.define({
         }
 
         switch (parsed.kind) {
-          case "help":
-            await reply(ctx.session as never, input.sessionID, parsed.reason ? `${parsed.reason}\n\n${help()}` : help())
+          case "help": {
+            // P3: rama SIN efectos. No escribe estado, no toca `entry.put/remove`: se lee el
+            // estado (ya resuelto arriba) y se contesta. Un `/flow stauts` no puede alterar nada.
+            const reason = parsed.reason ? `${parsed.reason}\n\n` : ""
+            await reply(ctx.session as never, input.sessionID, `${reason}${help({ active: previous?.active === true })}`)
             return
+          }
           case "bad-gate":
             await reply(ctx.session as never, input.sessionID, badGateMessage(parsed.name))
             return

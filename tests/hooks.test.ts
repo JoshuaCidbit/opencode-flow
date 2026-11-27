@@ -45,6 +45,8 @@ export type Harness = {
   readonly entries: Map<string, unknown>
   /** Conteo de escrituras en instructions (`entry.put`). */
   writes(): number
+  /** Conteo de borrados en instructions (`entry.remove`). */
+  removes(): number
 }
 
 /** `ctx` mínimo pero HONESTO: mismo cableado que el runtime, dobles en vez de cliente HTTP. */
@@ -66,6 +68,7 @@ export async function harness(initial?: {
 
   const entries = new Map<string, unknown>()
   const entryPuts: number[] = []
+  const entryRemoves: number[] = []
   const store = {
     async get(key: string) {
       return map.get(key)
@@ -103,6 +106,7 @@ export async function harness(initial?: {
             entries.set(key, value)
           },
           remove: async (key: string) => {
+            entryRemoves.push(1)
             entries.delete(key)
           },
         },
@@ -183,6 +187,7 @@ export async function harness(initial?: {
     compaction,
     state: (id) => map.get(`flow:${id}`) as FlowState | undefined,
     writes: () => entryPuts.length,
+    removes: () => entryRemoves.length,
   }
 }
 
@@ -368,3 +373,49 @@ for (const kind of ["context", "generate"] as const) {
     assert.ok(injected.includes(`.scratch/${longSlug}/understanding.md`), `la ruta lleva el slug de ${MAX_SLUG}`)
   })
 }
+
+// --- P3: la rama de ayuda no tiene efectos ------------------------------------------------
+// Un subcomando mal escrito con el flow activo (`stauts`, `nxt`, `of`) debe contestar con ayuda
+// y NADA más. Si escribiera estado, un dedazo podría mover la fase o reescribir el entry de
+// instructions; aquí se comprueba que no toca ni storage ni instructions.
+for (const typo of ["stauts", "nxt", "of"]) {
+  test(`P3: "/flow ${typo}" en fase 5 deja el estado idéntico y cero entry.put/remove`, async () => {
+    const root = mkdtempSync(join(tmpdir(), `flow-typo-${typo}-`))
+    mkdirSync(join(root, ".scratch", "auth"), { recursive: true })
+    const before = { fase: 5 as const, feature: "auth", active: true, allow: ["README.md"] }
+    const h = await harness({ root, states: { s1: { ...before } } })
+    const putsBefore = h.writes()
+    const removesBefore = h.removes()
+    await h.run("s1", typo)
+    // 1) estado idéntico
+    assert.deepEqual(h.state("s1"), { ...before }, `el estado cambió con "${typo}"`)
+    // 2) cero escrituras y cero borrados en instructions
+    assert.equal(h.writes(), putsBefore, `"${typo}" escribió en instructions`)
+    assert.equal(h.removes(), removesBefore, `"${typo}" borró de instructions`)
+    // 3) y contestó con ayuda, no silencio
+    const out = h.replies.join("\n")
+    assert.ok(out.includes("Uso: /flow"), `no hubo ayuda con "${typo}"`)
+    assert.ok(/no es un subcomando/.test(out), `la ayuda no explica el error: ${out}`)
+  })
+}
+
+test("P3: la ayuda con flow activo ofrece /flow start para otra feature", async () => {
+  const root = mkdtempSync(join(tmpdir(), "flow-help-active-"))
+  const h = await harness({ root, states: { s1: { fase: 5, feature: "auth", active: true } } })
+  await h.run("s1", "stauts")
+  const out = h.replies.join("\n")
+  assert.match(out, /\/flow start <descripción>/, "falta la salida para empezar otra feature")
+  // Y con flow inactivo NO se dice: quien no está en un flow no necesita cambiar de feature.
+  const h2 = await harness({ root: mkdtempSync(join(tmpdir(), "flow-help-idle-")) })
+  await h2.run("s2", "zzzz")
+  const out2 = h2.replies.join("\n")
+  assert.ok(!/\/flow start <descripción>/.test(out2), "inactivo no debe llevar el aviso")
+})
+
+test("P3: un subcomando válido con argumentos sigue escribiendo estado", async () => {
+  // Contrapeso: el test anterior no puede pasar "porque nunca se escribe". Aquí sí se escribe.
+  const root = mkdtempSync(join(tmpdir(), "flow-back-writes-"))
+  const h = await harness({ root, states: { s1: { fase: 5, feature: "auth", active: true } } })
+  await h.run("s1", "back 3")
+  assert.equal(h.state("s1")?.fase, 2, "back 3 debe mover a la 2")
+})
