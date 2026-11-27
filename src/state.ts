@@ -12,6 +12,11 @@ export type FlowState = {
   feature?: string
   slugProvisional?: boolean
   active: boolean
+  /**
+   * Gate B: rutas relativas que existían al ejecutar `/flow start` (`CONTEXT.md`, `docs/adr`).
+   * Sólo cuentan en fases 2-3; se guardan para que el gate no se abra a posteriori.
+   */
+  allow?: string[]
 }
 
 export type ResolvedState = {
@@ -34,7 +39,12 @@ export function stateKey(sessionID: string): string {
 export function isState(value: unknown): value is FlowState {
   if (!value || typeof value !== "object") return false
   const typed = value as Record<string, unknown>
-  return typeof typed.fase === "number" && typeof typed.active === "boolean"
+  if (typeof typed.fase !== "number" || typeof typed.active !== "boolean") return false
+  // Gate B: `allow` es una lista de rutas relativas; cualquier otra forma se descarta.
+  if (typed.allow !== undefined && (!Array.isArray(typed.allow) || !typed.allow.every((item) => typeof item === "string"))) {
+    return false
+  }
+  return true
 }
 
 /**

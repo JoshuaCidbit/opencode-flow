@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises"
-import { readFileSync, readdirSync } from "node:fs"
+import { existsSync, readFileSync, readdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { Plugin } from "@opencode/plugin"
@@ -336,6 +336,8 @@ export default Plugin.define({
         // A3: escrituras al dueño; el hijo nunca es dueño del estado.
         const owner = moved?.ownerID ?? input.sessionID
         const previous = moved?.state
+        // Gate B: lo que existía al hacer `/flow start`; se arrastra en cada transición.
+        const inheritedAllow = previous?.allow ? { allow: previous.allow } : {}
 
         switch (parsed.kind) {
           case "help":
@@ -345,7 +347,7 @@ export default Plugin.define({
             await ctx.session.prompt({ sessionID: input.sessionID, text: badGateMessage(parsed.name) })
             return
           case "off":
-            await writeState(owner, { fase: previous?.fase ?? 1, ...(previous?.gate ? { gate: previous.gate } : {}), ...(previous?.feature ? { feature: previous.feature } : {}), active: false })
+            await writeState(owner, { fase: previous?.fase ?? 1, ...(previous?.gate ? { gate: previous.gate } : {}), ...(previous?.feature ? { feature: previous.feature } : {}), ...inheritedAllow, active: false })
             await ctx.session.prompt({
               sessionID: input.sessionID,
               text: `${narration(previous?.fase ?? 1, "flow desactivado")}\nFlow desactivado para esta sesión. Reactiva con /flow start [N] [slug].`,
@@ -380,6 +382,7 @@ export default Plugin.define({
               fase: next,
               ...(gate ? { gate } : {}),
               ...(previous?.feature ? { feature: previous.feature } : {}),
+              ...inheritedAllow,
               active: true,
             })
             await ctx.session.prompt({ sessionID: input.sessionID, text: phaseBrief(next, previous?.feature) })
@@ -388,10 +391,14 @@ export default Plugin.define({
           case "start": {
             const entry = phase(parsed.fase)
             const gate = entry?.gate
+            // Gate B: se congela lo que EXISTÍA ahora. Si se crea CONTEXT.md después,
+            // no se cuela: el gate no se abre a posteriori.
+            const allow = ["CONTEXT.md", "docs/adr"].filter((name) => existsSync(join(projectRoot, name)))
             await writeState(owner, {
               fase: parsed.fase,
               ...(gate ? { gate } : {}),
               ...(parsed.feature ?? previous?.feature ? { feature: parsed.feature ?? previous?.feature } : {}),
+              ...(allow.length > 0 ? { allow } : {}),
               active: true,
             })
             await ctx.session.prompt({
@@ -503,7 +510,12 @@ export default Plugin.define({
           if (!state) return
           const target = writeTarget(tool, (event as { input?: unknown }).input, projectRoot)
           const verdict = verdictFor(
-            { projectRoot, fase: state.fase, ...(state.feature ? { feature: state.feature } : {}) },
+            {
+              projectRoot,
+              fase: state.fase,
+              ...(state.feature ? { feature: state.feature } : {}),
+              ...(state.allow ? { allow: state.allow } : {}),
+            },
             target,
           )
           if (verdict.allow) return

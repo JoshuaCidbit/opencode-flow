@@ -132,8 +132,16 @@ export function parseCommand(text: string): Parsed {
     const n = toPhase(rest[0])
     if (n === undefined) return { kind: "help", reason: `"${rest[0]}" no es una fase entre ${FIRST_PHASE} y ${LAST_PHASE}` }
     const slug = rest[1]
-    const feature = slug && /^[A-Za-z0-9._-]+$/.test(slug) ? slug : undefined
-    return { kind: "start", fase: n, ...(feature ? { feature } : {}) }
+    if (slug === undefined) return { kind: "start", fase: n }
+    // A10: el slug se valida antes de tocar disco. Nada de `.`, `..`, `/` ni `\`: son
+    // escapes de ruta, no nombres de feature.
+    if (!/^[a-z0-9-]{1,40}$/.test(slug)) {
+      return {
+        kind: "help",
+        reason: `slug "${slug}" inválido: usa minúsculas, dígitos y guiones (1-40), sin . / \\`,
+      }
+    }
+    return { kind: "start", fase: n, feature: slug }
   }
 
   return { kind: "help", reason: `subcomando desconocido "${head}"` }

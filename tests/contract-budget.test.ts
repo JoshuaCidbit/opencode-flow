@@ -13,11 +13,10 @@ const CONTRACT = readFileSync(join(HERE, "..", "flow.md"), "utf8")
 // su coste se paga por turno. Si se supera, el test falla: o se recorta el contrato,
 // o se sube el número a sabiendas.
 //
-// Medido al fijarlo (v0.3.0, contrato de 4d): máximo 5601 bytes en fase 5; el resto
-// ronda 5,1-5,2 KB; el archivo completo son 6806 bytes. Se deja margen para 4f, que
-// añadirá el contenido de las fases 1-4.
+// Medido al fijarlo (v0.3.0, tras Gate B en el bloque común): máximo 6040 bytes en fase 5;
+// el archivo completo ronda 7,2 KB. Se deja margen para 4f, que añadirá las fases 1-4.
 const BUDGET_BYTES = 9000
-const MEASURED_MAX_BYTES = 5601
+const MEASURED_MAX_BYTES = 6040
 
 test("A2: presupuesto de tamaño de lo inyectado por petición", () => {
   let worst = 0

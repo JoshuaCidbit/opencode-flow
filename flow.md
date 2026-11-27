@@ -26,6 +26,13 @@ Saltar una fase exige decir qué riesgo se asume y obtener aceptación explícit
 2. **Sin evidencia no hay afirmación.** Nunca digas "funciona", "listo", "arreglado" ni "tests pasan" sin haber corrido el comando en esta sesión y leído la salida completa.
 3. **Sin decisión de integración no hay cierre.** Antes de cerrar: cómo se integra (commit, PR, merge) y qué queda pendiente.
 
+## Dónde se escribe
+
+- **Fases 1-6:** sólo en `.scratch/<feature>/**`; en la fase 4 también en `/tmp/opencode-proto-<feature>/**`.
+- **Fases 2-3,** y sólo si ya existían al ejecutar `/flow start`: `CONTEXT.md` y `docs/adr/**`.
+- **Fase 7 en adelante:** código del proyecto, con `.scratch/<feature>/spec.md` escrito (y tickets en la fase 7).
+- El gate bloquea en el runtime. Si te bloquea, no rodees: escribe el artefacto que falta.
+
 ## Checkpoint (entregable de Plan)
 
 Antes de editar código, entrega exactamente:
