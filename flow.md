@@ -18,7 +18,7 @@ Reglas no negociables, activas en cada petición. Si una petición del usuario l
 | 10 | Cerrar | `retro` | lecciones registradas |
 
 Los artefactos viven todos bajo `.scratch/<feature>/`, menos el prototipo de la fase 4.
-Saltar una fase exige decir el riesgo que se asume. En fondo: `research`, `wait-what` y `handoff`.
+Saltar una fase exige decir el riesgo que se asume. Escaladas en segundo plano: `research`, `wait-what`, `handoff`.
 
 ## Tres gates
 

@@ -645,9 +645,16 @@ export default Plugin.define({
             const deduction = deducePhaseInfo(projectRoot, feature)
             const fromState = previous?.fase !== undefined
             const fase = previous?.fase ?? (feature ? deduction.fase : FIRST_PHASE)
+            // Que un artefacto exista en disco NO significa que estuviera aprobado: pudo ser
+            // un borrador que nadie aceptó. La deducción es una conjetura sobre el disco, así
+            // que siempre se dice qué se dedujo, por qué, y cómo corregirlo.
+            const desdeDisco = !fromState && feature ? deduction.reason : undefined
+            const caveat = "que exista no significa que estuviera aprobado: si era un borrador, corrígelo con /flow back"
             const why = fromState
               ? `fase ${fase} del estado guardado en la sesión (el disco no la reemplaza); si no era la esperada, corrige con /flow back`
-              : `fase ${fase} deducida de ${deduction.reason}; si ese artefacto era un borrador aún no aprobado, corrige con /flow back`
+              : desdeDisco
+                ? `fase ${fase} deducida de ${desdeDisco} (${caveat})`
+                : `fase ${fase} sin artefactos en disco que la sostengan (${caveat})`
             const entry = phase(fase)
             // Punto 4: el resume es un NUEVO punto de partida, así que la foto se recalcula.
             // Si se reutilizara `previous.allow`, un flow retomado tras crear CONTEXT.md

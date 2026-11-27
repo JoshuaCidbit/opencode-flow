@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { renderFor, phaseSections, parseSections, scopeToFeature } from "../src/contract.ts"
+import { MAX_SLUG } from "../src/slug.ts"
 import { PHASES, LAST_PHASE, FIRST_PHASE, phase } from "../src/phases.ts"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -15,15 +16,13 @@ const CONTRACT = readFileSync(join(HERE, "..", "flow.md"), "utf8")
 //
 // El presupuesto duro es el techo que paga el modelo por petición. No se sube sin decir por qué.
 const BUDGET_BYTES = 7000
-const MEASURED_MAX_BYTES = 6389
+const MEASURED_MAX_BYTES = 6406
 // Medido al fijarlo: ver tabla en el informe. El presupuesto se mide
 // con el slug MÁS LARGO posible, no con "abc": `<feature>` aparece muchas veces y 3 caracteres
 // de más por cada una cambiaban el tamaño real que paga el modelo.
-// 60 es la longitud que corta `baseSlug`, así que es el peor caso alcanzable HOY. `MAX_SLUG` de
-// slug.ts es una constante nueva para P2/P3; mientras `isValidSlug` siga rechazando >40, aquí se
-// usa una constante local: importar MAX_SLUG sería afirmar una coherencia que aún no existe.
-const MAX_SLUG_TEST = 60
-const WORST_SLUG = "a".repeat(MAX_SLUG_TEST)
+// `MAX_SLUG` se IMPORTA de slug.ts (no una constante local): es el peor caso alcanzable y, si el
+// tope sube, este test tiene que enterarse. Si deja de serlo, el número aquí mentiría.
+const WORST_SLUG = "a".repeat(MAX_SLUG)
 
 // Buffer.byteLength (no `.length`): las tildes y los «» cuentan 2 bytes en UTF-8 y eso es lo
 // que paga el contexto, no los caracteres. `worst` identifica la fase más cara para que el
@@ -44,7 +43,7 @@ function measureAll(contract: string, slug: string): { bytes: number[]; worst: n
 }
 const { bytes: PER_PHASE, worst, worstPhase } = measureAll(CONTRACT, WORST_SLUG)
 const TABLE = () => PER_PHASE.map((b, i) => `${i + 1}=${b}`).join(", ")
-const SLUG_NOTE = () => `slug de ${MAX_SLUG_TEST} caracteres ("${WORST_SLUG.slice(0, 8)}…")`
+const SLUG_NOTE = () => `slug de ${MAX_SLUG} caracteres ("${WORST_SLUG.slice(0, 8)}…")`
 
 test("A2: presupuesto con el slug más largo posible", () => {
   assert.ok(

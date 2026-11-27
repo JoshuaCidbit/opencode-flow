@@ -185,3 +185,39 @@ test("2: resumeTicketsOpted fija tdd sólo al deducir 6+ sin tickets", async () 
   // Con estado previo se hereda, no se inventa un `false`.
   assert.equal(resumeTicketsOpted({ fase: 7, feature: "auth" }, root, true), undefined)
 })
+
+// --- P2: deducción acotada y aviso de "no aprobado" ---------------------------------------
+// El estado en storage MANDA sobre el disco: si la sesión dice fase 3, un spec.md en disco
+// (que deduciría la 6) no puede moverla. `resume` además debe avisar de que existir no es
+// estar aprobado, porque deduce de artefactos que pueden ser borradores sin aprobar.
+import { harness } from "./hooks.test.ts"
+
+test("P2: resume con estado guardado en fase 3 y spec.md en disco se queda en 3 y lo explica", async () => {
+  const root = mkdtempSync(join(tmpdir(), "flow-resume-state-"))
+  mkdirSync(join(root, ".scratch", "auth"), { recursive: true })
+  writeFileSync(join(root, ".scratch", "auth", "spec.md"), "# Spec\n\nDe verdad.\n")
+  const h = await harness({
+    root,
+    // Estado previo: el usuario estaba en la 3. El disco sugeriría la 6 por el spec.
+    states: { s1: { fase: 3, feature: "auth", active: true } },
+  })
+  await h.run("s1", "resume")
+  const out = h.replies.join("\n")
+  assert.ok(out, "resume no respondió")
+  assert.ok(/fase 3/.test(out), `debe quedarse en la 3, no saltar al spec: ${out}`)
+  assert.ok(/no la reemplaza|no se reemplaza|estado guardado/.test(out), `debe explicar que manda el estado: ${out}`)
+  const state = h.state("s1")
+  assert.equal(state?.fase, 3, "el estado sigue en la 3")
+})
+
+test("P2: resume sin estado avisa de que existir no es estar aprobado", async () => {
+  const root = mkdtempSync(join(tmpdir(), "flow-resume-caveat-"))
+  mkdirSync(join(root, ".scratch", "auth"), { recursive: true })
+  writeFileSync(join(root, ".scratch", "auth", "understanding.md"), "# Entendí\n\nBorrador.\n")
+  const h = await harness({ root })
+  await h.run("s1", "resume auth")
+  const out = h.replies.join("\n")
+  assert.ok(out, "resume no respondió")
+  assert.ok(/no significa que estuviera aprobado/.test(out), `falta el aviso: ${out}`)
+  assert.ok(/flow back/.test(out), `debe decir cómo corregirlo: ${out}`)
+})

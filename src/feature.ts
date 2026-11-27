@@ -10,6 +10,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+import { MAX_SLUG } from "./slug.ts"
 import { isNonEmptyFile, satisfied } from "./gate.ts"
 
 export const FEATURE_MARKER = ".flow-feature"
@@ -25,15 +26,17 @@ export type FeatureMarker = {
  *
  * `fase` es la fase en la que se retoma si el artefacto existe: cerrar la 1 deja en la 2.
  * - understanding.md → la 1 (Entender) está cerrada → 2.
- * - glossary.md / GLOSSARY.md / CONTEXT.md → la 2 (Vocabulario) cerrada → 3.
+ * - glossary.md → la 2 (Vocabulario) cerrada → 3.
  * - design.md → la 3 (Diseño) cerrada → 4 (Sondear). Si además hay spec.md, la 5 está
  *   cerrada y el cálculo sube a 6; por eso "design.md → 4/5" se resuelve por precedencia.
  *
- * Cada nombre se busca en `.scratch/<feature>/` y en la raíz del proyecto.
+ * Cada nombre se busca ÚNICAMENTE en `.scratch/<feature>/`. Antes se buscaban también en la
+ * raíz (`CONTEXT.md`, `GLOSSARY.md`), y eso hacía deducir la fase 3 en una feature NUEVA por
+ * un archivo del proyecto que no tiene nada que ver: lo de la raíz es del repo, no del flow.
  */
 const DEDUCIBLE: ReadonlyArray<{ fase: number; names: readonly string[] }> = [
   { fase: 2, names: ["understanding.md"] },
-  { fase: 3, names: ["glossary.md", "GLOSSARY.md", "CONTEXT.md"] },
+  { fase: 3, names: ["glossary.md"] },
   { fase: 4, names: ["design.md"] },
 ]
 
@@ -44,7 +47,14 @@ export function readFeatureMarker(projectRoot: string): FeatureMarker | undefine
     if (!parsed || typeof parsed !== "object") return undefined
     const record = parsed as Record<string, unknown>
     const slug = record.slug
-    if (typeof slug !== "string" || slug.length === 0 || slug.length > 40) return undefined
+    // P5: el marcador lo puede escribir a mano quien quiera, así que se valida con el mismo
+    // rasero que el resto: dentro de MAX_SLUG y con la forma canónica. Un slug fuera de rango
+    // se ignora en vez de propagarse: si no, un marcador escrito a mano estiraría el contrato
+    // inyectado por encima del presupuesto medido.
+    if (typeof slug !== "string") return undefined
+    if (slug.length === 0 || slug.length > MAX_SLUG) return undefined
+    if (!/^[a-z0-9-]+$/.test(slug)) return undefined
+    if (slug.startsWith("-") || slug.endsWith("-") || slug.includes("--")) return undefined
     return { slug, createdAt: typeof record.createdAt === "string" ? record.createdAt : new Date(0).toISOString() }
   } catch {
     return undefined
@@ -69,12 +79,12 @@ export type Deduction = {
 }
 
 /** Primer nombre presente de `names`, con su ruta relativa como razón. Nunca lanza.
- *  Misma regla que el gate (`isNonEmptyFile`): un archivo vacío no es evidencia de trabajo. */
+ *  Sólo mira `.scratch/<feature>/`: lo que haya en la raíz del proyecto es del repo.
+ *  Un archivo vacío no es evidencia de trabajo (misma regla que el gate). */
 function presentName(projectRoot: string, feature: string, names: readonly string[]): string | undefined {
   for (const name of names) {
     const inFeature = join(".scratch", feature, name)
     if (isNonEmptyFile(join(projectRoot, inFeature))) return inFeature
-    if (isNonEmptyFile(join(projectRoot, name))) return name
   }
   return undefined
 }
