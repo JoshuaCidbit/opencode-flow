@@ -26,19 +26,19 @@ import {
 } from "./state.ts"
 import { makeLogger, OnceLog } from "./log.ts"
 import { decide, WRITING_TOOLS } from "./gate-decision.ts"
+import { renderFor } from "./contract.ts"
 
 const LOG_PREFIX = "[opencode-flow]"
 
-// Fallos de arranque que ocurren ANTES de que exista el logger del runtime (p. ej. leer
-// el contrato). Se registran una vez por proceso. Regla 1 de silencio: una vez, nunca por turno.
-const startupLog = new OnceLog({
-  error: (message, extra) => (extra !== undefined ? console.error(message, extra) : console.error(message)),
-})
+// Único sitio donde vive el prefijo de los logs: OnceLog lo aplica; aquí sólo se usa
+// para construir los loggers de arranque, que existen antes de `setup(ctx)`.
+const startupLog = new OnceLog(
+  { error: (message, extra) => (extra !== undefined ? console.error(message, extra) : console.error(message)) },
+  LOG_PREFIX,
+)
 
 // `push()` es una función libre, así que necesita su propio guardia de "una vez".
-const pushLog = new OnceLog({
-  error: (message) => console.error(message),
-})
+const pushLog = new OnceLog({ error: (message) => console.error(message) }, LOG_PREFIX)
 
 // Memoria de proceso del último error interno del gate (regla 4). /flow status lo muestra.
 let lastGateError: string | undefined
@@ -145,7 +145,7 @@ function addMissingSkills(editor: SkillEditorLike, bundled: BundledSkill[]): str
   return added
 }
 
-export { addMissingSkills, readBundledSkills }
+export { addMissingSkills, loadContract, readBundledSkills }
 
 // The narration line this contract asks for, e.g. "[flow] fase 5 · gate pendiente: evidencia".
 const STATE_RE = /\[flow\]\s*fase\s*(\d+)\s*·\s*gate pendiente:\s*([^\n]+)/gi
@@ -154,23 +154,32 @@ const UNKNOWN_GATE = "gate no identificado (revisar historial)"
 
 type Disposable = { dispose: () => Promise<void> }
 
+export type Contract = {
+  text: string
+  /** Ruta efectiva: la de `options.path` si se dio, si no la empaquetada. */
+  source: string
+}
+
 /**
  * Load the flow contract. A custom path can be supplied through plugin options:
  * { "package": "opencode-flow", "options": { "path": "/abs/flow.md" } }
+ *
+ * `options.path` afecta de verdad a lo inyectado: si ese archivo no tiene secciones
+ * `## Fase N`, no se adivina; se inyecta completo y se avisa una vez.
  */
-async function loadContract(options: Record<string, unknown>): Promise<string | undefined> {
+async function loadContract(options: Record<string, unknown>): Promise<Contract | undefined> {
   const custom = typeof options.path === "string" ? options.path : undefined
   const source = custom ?? DEFAULT_CONTRACT
 
   try {
     const text = await readFile(source, "utf8")
     if (!text.trim()) {
-      startupLog.once("contract-empty", `${LOG_PREFIX} contrato vacío: ${source}`)
+      startupLog.once("contract-empty", `contrato vacío: ${source}`)
       return undefined
     }
-    return text
+    return { text, source }
   } catch (error) {
-    startupLog.once("contract-unreadable", `${LOG_PREFIX} no pude leer el contrato en ${source}: ${String(error)}`)
+    startupLog.once("contract-unreadable", `no pude leer el contrato en ${source}: ${String(error)}`)
     return undefined
   }
 }
@@ -238,7 +247,7 @@ function push(event: { system?: unknown }, text: string, kind: string): void {
   // Defensive: if the event shape ever changes, never break the native request.
   if (!Array.isArray(event.system)) {
     // Silencio total en lo conversacional: esto va a log, nunca al chat ni al contexto.
-    pushLog.once(`push-shape:${kind}`, `${LOG_PREFIX} forma inesperada en ${kind} (system no es array); omito`)
+    pushLog.once(`push-shape:${kind}`, `forma inesperada en ${kind} (system no es array); omito`)
     return
   }
   event.system.push({ type: "text", text })
@@ -249,16 +258,22 @@ export { flowAddendum, lastState }
 export default Plugin.define({
   id: "opencode-flow",
   async setup(ctx) {
-    const contract = await loadContract(ctx.options ?? {})
-    if (!contract) return
+    // A0: logger del runtime si existe; si no, consola. Todo fallo se registra una vez.
+    const log = new OnceLog(makeLogger(ctx))
+
+    // Punto 5: sin contrato (falta, está vacío o no se pudo leer) NO se aborta. El gate y las
+    // skills siguen funcionando; sólo se pierde la guía en prosa y se avisa una vez.
+    const loaded = await loadContract(ctx.options ?? {})
+    const contract = loaded?.text
+    const contractSource = loaded?.source ?? DEFAULT_CONTRACT
+    if (!contract) {
+      log.once("no-contract", "sin contrato: uso el brief mínimo derivado de phases.ts. El gate y las skills siguen activos.")
+    }
 
     const registrations: Disposable[] = []
 
     // Artefact paths resolve against the project, so the gate survives a different cwd.
     const projectRoot = String(ctx.location?.project?.directory ?? ctx.location?.directory ?? process.cwd())
-
-    // A0: logger del runtime si existe; si no, consola. Todo fallo se registra una vez.
-    const log = new OnceLog(makeLogger(ctx))
 
     const storage = ctx.storage as unknown as StorageLike | undefined
     if (!storage) {
@@ -401,9 +416,16 @@ export default Plugin.define({
       )
     }
 
-    // Active: the rules of the phase, once per turn — the narration instruction inside them must
-    // survive compaction, which `ctx.session.prompt` history does not.
+    // Active: bloque común del contrato + sección de la fase actual, reconstruidos en cada
+    // petición (lo inyectado en system NO persiste en el historial).
     // Inactive: total silence. Not even a reminder: the flow is opt-in and stays invisible.
+    //
+    // A6 (verificado en runtime 2.4.2, sonda en /tmp): `context` y `generate` NO co-disparan
+    // en la misma petición; cada uno corresponde a un tipo de petición distinto, y
+    // `compaction` sólo se dispara al compactar. Por eso no hay doble inyección por turno.
+    // Aun así, si un runtime futuro los disparara ambos, el daño sería texto repetido, no
+    // estado corrupto: el hook es de sólo lectura de estado. La dedup fina (marcador en el
+    // texto) se pospone a 4e, donde el gate cambia igualmente.
     for (const kind of ["context", "generate"] as const) {
       registrations.push(
         await ctx.session.hook(kind, async (event) => {
@@ -412,7 +434,17 @@ export default Plugin.define({
           const moved = await advanceState(resolved)
           const state = moved?.state
           if (!state || !state.active) return
-          push(event, phaseBrief(state.fase, state.feature), kind)
+
+          // Punto 4: el contrato efectivo es el que cargó `options.path` (o el empaquetado).
+          // Punto 5: sin contrato, brief mínimo derivado de phases.ts (aviso ya registrado).
+          const rendered = contract ? renderFor(contract, state.fase) : undefined
+          if (rendered?.degraded) {
+            log.once(
+              `contract-degraded:${kind}`,
+              `el contrato no tiene secciones '## Fase N' (${contractSource}); inyecto el archivo completo como degradación`,
+            )
+          }
+          push(event, rendered?.text ?? phaseBrief(state.fase, state.feature), kind)
         }),
       )
     }
@@ -493,7 +525,7 @@ export default Plugin.define({
     // Éxito de arranque: nivel debug, nunca una línea visible (regla 2).
     log.debug(
       "startup",
-      `contrato cargado (${Buffer.byteLength(contract, "utf8")} bytes), ${bundled.length} skills empaquetadas, ${storage ? "storage disponible" : "storage NO disponible"}, gate ${gateAvailable ? "armado" : "DESARMADO"}`,
+      `contrato ${contract ? `${Buffer.byteLength(contract, "utf8")} bytes desde ${contractSource}` : "AUSENTE (brief mínimo)"}, ${bundled.length} skills empaquetadas, ${storage ? "storage disponible" : "storage NO disponible"}, gate ${gateAvailable ? "armado" : "DESARMADO"}`,
     )
     return async () => {
       await Promise.all(registrations.map((registration) => registration.dispose()))

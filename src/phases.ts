@@ -31,7 +31,7 @@ export const PHASES: readonly Phase[] = [
     n: 4,
     name: "Sondear",
     skill: "prototype",
-    closes: "respuesta a una pregunta de diseño (sólo /tmp/opencode-proto-<slug>)",
+    closes: "respuesta a una pregunta de diseño",
     blocks: false,
   },
   {
@@ -97,8 +97,6 @@ export type Parsed =
   | { kind: "gate"; gate: GateName }
   | { kind: "bad-gate"; name: string }
   | { kind: "off" }
-
-const NARRATION_HELP = "Repite la primera línea de arriba en cada transición de fase y antes de afirmar avance."
 
 function toPhase(raw: string): PhaseNumber | undefined {
   if (!/^\d+$/.test(raw)) return undefined
@@ -170,11 +168,16 @@ export function phaseMap(): string {
   return PHASES.map(summaryLine).join("\n")
 }
 
-/** ~15 lines: what the model must do in this phase. Injected as a real message, not a hint. */
+/**
+ * Brief MÍNIMO derivado de los datos estructurales cuando NO hay contrato.
+ *
+ * Toda la prosa por fase vive en `flow.md` (sección `## Fase N`); aquí sólo queda lo
+ * que se puede deducir de los datos: número, nombre, skill, gate y artefacto. El gate
+ * y las skills siguen funcionando sin contrato: sólo se pierde la guía en prosa.
+ */
 export function phaseBrief(fase: number, feature?: string): string {
   const entry = phase(fase)
   if (!entry) return `${narration(fase, "gate desconocido")}\nFase ${fase} fuera del mapa (1-${LAST_PHASE}).`
-  const scratch = feature ? `.scratch/${feature}/` : ".scratch/<feature>/"
   const lines = [
     narration(entry.n, entry.gate ?? "checkpoint aprobado por el usuario"),
     "",
@@ -182,22 +185,9 @@ export function phaseBrief(fase: number, feature?: string): string {
     `Skill a cargar: ${entry.skill}`,
     `Cierra con: ${entry.closes}`,
   ]
-  if (entry.n === 4) lines.push("Escribe sólo en /tmp/opencode-proto-<slug>; es desechable, no se commitea.")
-  if (entry.n === 5) {
-    lines.push(
-      "No exijas las fases 1-4 para arrancar aquí: si la conversación ya trae el problema, sintetízalo ahora mismo.",
-      `Escribe el spec ya en ${scratch}spec.md con lo que hayas entendido (problema, alcance, fuera de alcance, criterios de aceptación).`,
-      "No te bloquees esperando datos que falten: escribe con lo que hay y marca los supuestos.",
-      "Sigue en loop con el usuario hasta que apruebe; el gate se abre solo cuando el archivo exista.",
-    )
-  }
-  if (feature) lines.push(`Feature declarada: ${feature} (raíz de artefactos: ${scratch})`)
-  else if (entry.blocks) lines.push("Feature: no declarada. El gate queda inactivo hasta `/flow start N <slug>`.")
-  if (entry.gate) {
-    lines.push(`Gate de esta fase: ${entry.gate} — ciérralo con /flow gate ${entry.gate}.`)
-    if (entry.blocks) lines.push(`Sin el artefacto, toda escritura fuera de él está bloqueada. Escapatoria: /flow off.`)
-  }
-  lines.push("", NARRATION_HELP)
+  if (feature) lines.push(`Feature declarada: ${feature} (raíz de artefactos: .scratch/${feature}/)`)
+  else if (entry.blocks) lines.push(`Artefacto exigido: falta declarar feature con /flow start ${entry.n} <slug>.`)
+  if (entry.gate) lines.push(`Gate de esta fase: ${entry.gate} — ciérralo con /flow gate ${entry.gate}.`)
   return lines.join("\n")
 }
 
