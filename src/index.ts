@@ -526,7 +526,7 @@ export default Plugin.define({
               ...inheritedAllow,
               active: true,
             })
-            await reply(ctx.session as never, input.sessionID, phaseBrief(next, previous?.feature))
+            await reply(ctx.session as never, input.sessionID, phaseBrief(next, previous?.feature), { resume: true })
             return
           }
           case "start": {
@@ -569,6 +569,7 @@ export default Plugin.define({
               `${offer}${gateAvailable
                 ? phaseBrief(parsed.fase, feature, topic)
                 : `${phaseBrief(parsed.fase, feature, topic)}\n\nAVISO: gate de escritura no disponible en este runtime: el flow solo guía, no bloquea.`}`,
+              { resume: true },
             )
             return
           }
@@ -600,6 +601,7 @@ export default Plugin.define({
               next === previous.fase
                 ? `${narration(next, entry?.gate ?? "ninguno")}\nYa estás en la fase ${LAST_PHASE}; no hay siguiente.`
                 : phaseBrief(next, previous.feature),
+              { resume: next !== previous.fase },
             )
             return
           }
@@ -625,6 +627,7 @@ export default Plugin.define({
               ctx.session as never,
               input.sessionID,
               `${narration(target, entry?.gate ?? "ninguno")}\n${phaseBrief(target, previous.feature)}\n\nAVISO: retroceder reabre el gate y sus artefactos. No borra lo escrito.`,
+              { resume: true },
             )
             return
           }
@@ -728,6 +731,7 @@ export default Plugin.define({
                 `[flow] por qué: ${why}` +
                 `\n` +
                 `${phaseBrief(fase, feature, topic)}`,
+              { resume: true },
             )
             return
           }

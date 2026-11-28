@@ -122,3 +122,66 @@ test("skills: ninguna skill empaquetada exige setup-matt-pocock-skills", () => {
     }
   }
 })
+
+test("v0.3.2: comandos de arranque/avance despiertan turno (resume:true) y consultas no (resume:false)", async () => {
+  const { default: plugin } = await import("../src/index.ts")
+  const { mkdtempSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+
+  const dir = mkdtempSync(join(tmpdir(), "flow-v032-"))
+  const store = new Map<string, unknown>()
+  const calls: Array<{ text?: string; resume?: boolean }> = []
+  let cmdHandler: ((input: { sessionID: string; prompt?: unknown }) => Promise<void>) | undefined
+
+  await plugin.setup({
+    location: { project: { directory: dir } },
+    options: {},
+    storage: {
+      get: async (k: string) => store.get(k),
+      set: async (k: string, v: unknown) => { store.set(k, v) },
+    },
+    logger: { error: () => undefined, debug: () => undefined },
+    session: {
+      get: async () => undefined,
+      hook: async () => ({ dispose: async () => undefined }),
+      instructions: {
+        entry: {
+          put: async () => undefined,
+          remove: async () => undefined,
+        },
+      },
+      synthetic: async (input: { text?: string; resume?: boolean }) => {
+        calls.push(input)
+      },
+    },
+    tool: { hook: async () => ({ dispose: async () => undefined }) },
+    command: {
+      transform: async (apply: (ed: { add: (cmd: { execute: (input: { sessionID: string; prompt?: unknown }) => Promise<void> }) => void }) => void) => {
+        apply({ add: (cmd) => { cmdHandler = cmd.execute } })
+        return { dispose: async () => undefined }
+      },
+    },
+    skill: { transform: async () => ({ dispose: async () => undefined }) },
+  } as never)
+
+  assert.ok(cmdHandler, "comando /flow registrado")
+
+  await cmdHandler({ sessionID: "s1", prompt: "mi feature" })
+  assert.equal(calls.at(-1)?.resume, true, "start debe usar resume:true")
+
+  await cmdHandler({ sessionID: "s1", prompt: "status" })
+  assert.equal(calls.at(-1)?.resume, false, "status debe mantener resume:false")
+
+  await cmdHandler({ sessionID: "s1", prompt: "map" })
+  assert.equal(calls.at(-1)?.resume, false, "map debe mantener resume:false")
+
+  await cmdHandler({ sessionID: "s1", prompt: "gate spec" })
+  assert.equal(calls.at(-1)?.resume, true, "gate debe usar resume:true")
+
+  await cmdHandler({ sessionID: "s1", prompt: "off" })
+  assert.equal(calls.at(-1)?.resume, false, "off debe mantener resume:false")
+
+  await cmdHandler({ sessionID: "s1", prompt: "resume mi-feature" })
+  assert.equal(calls.at(-1)?.resume, true, "resume debe usar resume:true")
+})

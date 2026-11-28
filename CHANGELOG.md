@@ -129,6 +129,11 @@ tickets (A2 + A10 + Gate B + C1/C2/C7). Etiqueta pendiente de la prueba manual e
   contra sus tipos); si un runtime futuro los disparara ambos, habría texto repetido, nunca estado corrupto.
   No hay marcador de deduplicación; se deja como limitación conocida.
 
+## 0.3.2
+- Arranque y avance en un solo turno (`resume: true`) para `/flow <slug>`, `/flow start`, `/flow resume`, `/flow gate`, `/flow next` y `/flow back`, evitando que la TUI quede esperando un segundo mensaje del usuario.
+- Mantiene `resume: false` (0 tokens) para consultas y paradas (`/flow status`, `/flow map`, `/flow help`, `/flow off`, `/flow rename`).
+- Habilita invocación directa por el modelo en los skills empaquetados `to-spec`, `to-tickets` e `implement-spec`.
+
 ## 0.3.1
 - Subcomando `/flow map` para imprimir la tabla de 10 fases sin alterar el estado.
 - Evita que cerrar un gate anterior (`/flow gate <anterior>`) retroceda la fase actual (`Math.max`).
