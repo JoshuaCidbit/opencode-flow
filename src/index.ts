@@ -13,6 +13,7 @@ import {
   phase,
   phaseBrief,
   phaseByGate,
+  phaseMap,
   reminder,
   contextSummary,
 } from "./phases.ts"
@@ -46,6 +47,9 @@ const startupLog = new OnceLog(
 
 // `push()` es una función libre, así que necesita su propio guardia de "una vez".
 const pushLog = new OnceLog({ error: (message) => console.error(message) }, LOG_PREFIX)
+
+// Evita doble inyección si `context` y `generate` comparten el mismo array `event.system`.
+const injectedSystems = new WeakSet<object>()
 
 // Memoria de proceso del último error interno del gate (regla 4). /flow status lo muestra.
 let lastGateError: string | undefined
@@ -321,12 +325,16 @@ function flowAddendum(state: FlowState | undefined, messages: unknown): string {
   ].join("\n")
 }
 
-function push(event: { system?: unknown }, text: string, kind: string): void {
+function push(event: { system?: unknown }, text: string, kind: string, deduplicate = false): void {
   // Defensive: if the event shape ever changes, never break the native request.
   if (!Array.isArray(event.system)) {
     // Silencio total en lo conversacional: esto va a log, nunca al chat ni al contexto.
     pushLog.once(`push-shape:${kind}`, `forma inesperada en ${kind} (system no es array); omito`)
     return
+  }
+  if (deduplicate) {
+    if (injectedSystems.has(event.system)) return
+    injectedSystems.add(event.system)
   }
   event.system.push({ type: "text", text })
 }
@@ -447,6 +455,11 @@ export default Plugin.define({
             await reply(ctx.session as never, input.sessionID, `${reason}${help({ active: previous?.active === true })}`)
             return
           }
+          case "map": {
+            // Rama SIN efectos: imprime el mapa de las 10 fases.
+            await reply(ctx.session as never, input.sessionID, phaseMap())
+            return
+          }
           case "bad-gate":
             await reply(ctx.session as never, input.sessionID, badGateMessage(parsed.name))
             return
@@ -497,7 +510,9 @@ export default Plugin.define({
               await reply(ctx.session as never, input.sessionID, badGateMessage(parsed.gate))
               return
             }
-            const next = target.n >= LAST_PHASE ? target.n : target.n + 1
+            const advanced = target.n >= LAST_PHASE ? target.n : target.n + 1
+            // Nunca retrocede si el usuario cierra un gate anterior a su fase actual.
+            const next = Math.max(previous?.fase ?? FIRST_PHASE, advanced)
             const nextPhase = phase(next)
             const gate = nextPhase?.gate
             await commit({
@@ -730,13 +745,8 @@ export default Plugin.define({
     // Active: bloque común del contrato + sección de la fase actual, reconstruidos en cada
     // petición (lo inyectado en system NO persiste en el historial).
     // Inactive: total silence. Not even a reminder: the flow is opt-in and stays invisible.
-    //
-    // A6 (verificado en runtime 2.4.2 contra sus tipos): `context` y `generate` NO co-disparan
-    // en la misma petición; cada uno corresponde a un tipo de petición distinto, y
-    // `compaction` sólo se dispara al compactar. Por eso no hay doble inyección por turno.
-    // Aun así, si un runtime futuro los disparara ambos, el daño sería texto repetido, no
-    // estado corrupto: el hook es de sólo lectura de estado. No hay dedup por marcador: se
-    // considera LIMITACIÓN CONOCIDA (ver CHANGELOG) mientras no se observe el co-disparo.
+    // Deduplicado por identidad de `event.system` para evitar doble inyección si un runtime
+    // dispara `context` y `generate` en la misma petición.
     for (const kind of ["context", "generate"] as const) {
       registrations.push(
         await ctx.session.hook(kind, async (event) => {
@@ -755,7 +765,7 @@ export default Plugin.define({
               `el contrato no tiene secciones '## Fase N' (${contractSource}); inyecto el archivo completo como degradación`,
             )
           }
-          push(event, scopeToFeature(rendered?.text ?? phaseBrief(state.fase, state.feature), state.feature), kind)
+          push(event, scopeToFeature(rendered?.text ?? phaseBrief(state.fase, state.feature), state.feature), kind, true)
         }),
       )
     }

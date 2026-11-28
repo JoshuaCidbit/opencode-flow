@@ -109,6 +109,36 @@ export function parseSections(contract: string): Sections {
 }
 
 /**
+ * Recorta subsecciones `## ...` del bloque común que no aplican a la fase actual:
+ *   - `## Formato del checkpoint (fase 1)` sólo aplica en fase 1.
+ *   - `## Verificación (escalera)` sólo aplica a partir de fase 4 (prototipo/código).
+ */
+function pruneCommonForPhase(common: string, fase: number): string {
+  const blocks: { heading: string; lines: string[] }[] = []
+  let current: { heading: string; lines: string[] } = { heading: "", lines: [] }
+
+  for (const line of common.split(/\r?\n/)) {
+    if (/^##\s+/.test(line)) {
+      blocks.push(current)
+      current = { heading: line, lines: [line] }
+      continue
+    }
+    current.lines.push(line)
+  }
+  blocks.push(current)
+
+  return blocks
+    .filter((b) => {
+      if (fase > 1 && /^##\s+Formato del checkpoint\b/i.test(b.heading)) return false
+      if (fase < 4 && /^##\s+Verificaci[óo]n\b/i.test(b.heading)) return false
+      return true
+    })
+    .map((b) => b.lines.join("\n").trim())
+    .filter(Boolean)
+    .join("\n\n")
+}
+
+/**
  * Lo que se inyecta en una petición: bloque común + sección de la fase.
  *
  * Con contrato sin secciones -> el archivo completo (degradación honesta).
@@ -128,7 +158,8 @@ export function renderFor(contract: string, fase: number): { text: string; degra
     }
   }
 
-  return { text: `${sections.common}\n\n${section}`.trim(), degraded: false }
+  const common = pruneCommonForPhase(sections.common, fase)
+  return { text: `${common}\n\n${section}`.trim(), degraded: false }
 }
 
 /**

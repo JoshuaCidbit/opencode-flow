@@ -16,7 +16,7 @@ const CONTRACT = readFileSync(join(HERE, "..", "flow.md"), "utf8")
 //
 // El presupuesto duro es el techo que paga el modelo por petición. No se sube sin decir por qué.
 const BUDGET_BYTES = 7000
-const MEASURED_MAX_BYTES = 6406
+const MEASURED_MAX_BYTES = 5891
 // Medido al fijarlo: ver tabla en el informe. El presupuesto se mide
 // con el slug MÁS LARGO posible, no con "abc": `<feature>` aparece muchas veces y 3 caracteres
 // de más por cada una cambiaban el tamaño real que paga el modelo.

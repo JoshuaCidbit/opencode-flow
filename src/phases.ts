@@ -16,9 +16,9 @@ export type Phase = {
   /** Gate that closes this phase. Absent for phases 1-4 (nothing to verify by hand off). */
   readonly gate?: GateName
   /**
-   * Artifact the gate checks, relative to the project root.
-   * - `file`: exact path that must exist.
-   * - `dir`:  directory that must contain at least one `*.md`.
+- Artifact the gate checks, relative to the project root.
+- - `file`: exact path that must exist.
+- - `dir`:  directory that must contain at least one `*.md`.
    */
   readonly artifact?: (feature: string) => { file?: string; dir?: string }
   /** Whether a missing artifact blocks edits. Only phases whose gate is file-verifiable. */
@@ -90,8 +90,8 @@ export function narration(fase: number, gate: string): string {
 }
 
 /**
- * Línea única de estado, compartida por el entry de instructions y por los resúmenes.
- * UNA definición de "cómo se ve el estado": si cambia el formato, cambia aquí.
+- Línea única de estado, compartida por el entry de instructions y por los resúmenes.
+- UNA definición de "cómo se ve el estado": si cambia el formato, cambia aquí.
  */
 export function stateLine(state: { fase: number; active: boolean; feature?: string; gate?: string }): string {
   const parts = [`fase ${state.fase}`, state.active ? "activo" : "inactivo"]
@@ -106,11 +106,11 @@ export function stateLine(state: { fase: number; active: boolean; feature?: stri
 // Subcomandos conocidos. De aquí salen la ayuda y las sugerencias por parecido, así que
 // añadir un subcomando obliga a tocar este único sitio.
 const SUBCOMMANDS: readonly string[] = [
-  "help", "off", "status", "gate", "start", "next", "back", "rename", "resume",
+  "help", "off", "status", "map", "gate", "start", "next", "back", "rename", "resume",
 ]
 
 /** Normaliza para comparar: minúsculas, sin acentos y sin guiones ni barras.
- *  `státus`, `STATUS` y `status` son el mismo subcomando para quien teclea rápido. */
+-  `státus`, `STATUS` y `status` son el mismo subcomando para quien teclea rápido. */
 export function foldCommand(raw: string): string {
   return raw
     .normalize("NFD")
@@ -120,7 +120,7 @@ export function foldCommand(raw: string): string {
 }
 
 /** Distancia de edición (Levenshtein) acotada: si supera `max`, devuelve `max + 1`.
- *  El corte evita rellenar la matriz completa para palabras que no se parecen en nada. */
+-  El corte evita rellenar la matriz completa para palabras que no se parecen en nada. */
 function editDistance(a: string, b: string, max: number): number {
   if (a === b) return 0
   if (Math.abs(a.length - b.length) > max) return max + 1
@@ -141,7 +141,7 @@ function editDistance(a: string, b: string, max: number): number {
 }
 
 /** Subcomando más parecido, si está a distancia <= 2. `undefined` si no hay ninguno cercano:
- *  sugerir cualquier cosa convierte la ayuda en ruido. */
+-  sugerir cualquier cosa convierte la ayuda en ruido. */
 export function suggestSubcommand(raw: string): string | undefined {
   const target = foldCommand(raw)
   if (!target) return undefined
@@ -161,6 +161,7 @@ export type Parsed =
   | { kind: "help"; reason?: string; suggestion?: string }
   | { kind: "start"; fase: PhaseNumber; feature?: string; topic?: string }
   | { kind: "status" }
+  | { kind: "map" }
   | { kind: "gate"; gate: GateName }
   | { kind: "bad-gate"; name: string }
   | { kind: "off" }
@@ -176,13 +177,13 @@ function toPhase(raw: string): PhaseNumber | undefined {
 }
 
 /**
- * Parse what the user typed after `/flow` (or `/workflow`).
- * A bare invocation means "start at 1", so the trigger stays a user act, not a model decision.
+- Parse what the user typed after `/flow` (or `/workflow`).
+- A bare invocation means "start at 1", so the trigger stays a user act, not a model decision.
  *
- * `active` distingue dos situaciones que antes compartían rama: con el flow YA activo, cualquier
- * texto raro es un subcomando mal escrito (ayuda); con el flow inactivo puede que el usuario esté
- * describiendo la feature que quiere empezar, así que una sola palabra desconocida es ayuda y una
- * descripción libre exige al menos dos.
+- `active` distingue dos situaciones que antes compartían rama: con el flow YA activo, cualquier
+- texto raro es un subcomando mal escrito (ayuda); con el flow inactivo puede que el usuario esté
+- describiendo la feature que quiere empezar, así que una sola palabra desconocida es ayuda y una
+- descripción libre exige al menos dos.
  */
 export function parseCommand(text: string, options: { active?: boolean } = {}): Parsed {
   const parts = text.trim().split(/\s+/).filter(Boolean)
@@ -194,6 +195,7 @@ export function parseCommand(text: string, options: { active?: boolean } = {}): 
   if (sub === "help") return { kind: "help" }
   if (sub === "off") return { kind: "off" }
   if (sub === "status") return { kind: "status" }
+  if (sub === "map") return { kind: "map" }
 
   if (sub === "gate") {
     const name = (rest[0] ?? "").toLowerCase()
@@ -262,9 +264,9 @@ export function parseCommand(text: string, options: { active?: boolean } = {}): 
 }
 
 /**
- * Texto original del usuario, recortado. P4: el slug sirve para nombrar archivos, pero el slug
- * PIERDE el tema real (se queda en 60 caracteres y sin acentos). Quien retoma necesita leer qué
- * se pidió, no adivinarlo de `autenticacion-con-tokens-de-sesion-y-rotacion`.
+- Texto original del usuario, recortado. P4: el slug sirve para nombrar archivos, pero el slug
+- PIERDE el tema real (se queda en 60 caracteres y sin acentos). Quien retoma necesita leer qué
+- se pidió, no adivinarlo de `autenticacion-con-tokens-de-sesion-y-rotacion`.
  */
 export const TOPIC_MAX = 500
 function topicFrom(raw: string): string {
@@ -297,6 +299,7 @@ export function help(options: { active?: boolean } = {}): string {
     "  rename <slug>         renombra la feature (mueve .scratch/<slug>/ si existe)",
     "  resume [slug]         reactiva el flow parado; opcionalmente adopta otro slug",
     "  status                fase, gate pendiente, si hay spec y si está activo",
+    "  map                   muestra el mapa completo de las 10 fases",
     "  gate <nombre>         cierra el gate y avanza de fase",
     "  off                   desactiva el flow para esta sesión",
     "  help                  esta ayuda",
@@ -318,10 +321,10 @@ export function phaseMap(): string {
 }
 
 /**
- * Resolve the artifact the active gate demands. Vive aquí (y no en `gate.ts`) porque no toca
- * disco y produce TEXTO para el modelo; `gate.ts` la importa para decidir. Si viviera en
- * `gate.ts`, `phases.ts` tendría que importarlo y cerraríamos un ciclo.
- * `undefined` means "no artifact to check": either there is no phase, or no feature was declared.
+- Resolve the artifact the active gate demands. Vive aquí (y no en `gate.ts`) porque no toca
+- disco y produce TEXTO para el modelo; `gate.ts` la importa para decidir. Si viviera en
+- `gate.ts`, `phases.ts` tendría que importarlo y cerraríamos un ciclo.
+- `undefined` means "no artifact to check": either there is no phase, or no feature was declared.
  */
 export function artifactPaths(feature: string | undefined, entry: Phase | undefined): string[] | undefined {
   const spec = entry?.artifact?.(feature ?? "")
@@ -333,11 +336,11 @@ export function artifactPaths(feature: string | undefined, entry: Phase | undefi
 }
 
 /**
- * Brief MÍNIMO derivado de los datos estructurales cuando NO hay contrato.
+- Brief MÍNIMO derivado de los datos estructurales cuando NO hay contrato.
  *
- * Toda la prosa por fase vive en `flow.md` (sección `## Fase N`); aquí sólo queda lo
- * que se puede deducir de los datos: número, nombre, skill, gate y artefacto. El gate
- * y las skills siguen funcionando sin contrato: sólo se pierde la guía en prosa.
+- Toda la prosa por fase vive en `flow.md` (sección `## Fase N`); aquí sólo queda lo
+- que se puede deducir de los datos: número, nombre, skill, gate y artefacto. El gate
+- y las skills siguen funcionando sin contrato: sólo se pierde la guía en prosa.
  */
 export function phaseBrief(fase: number, feature?: string, topic?: string): string {
   const entry = phase(fase)

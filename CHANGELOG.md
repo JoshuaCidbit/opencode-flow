@@ -129,6 +129,13 @@ tickets (A2 + A10 + Gate B + C1/C2/C7). Etiqueta pendiente de la prueba manual e
   contra sus tipos); si un runtime futuro los disparara ambos, habría texto repetido, nunca estado corrupto.
   No hay marcador de deduplicación; se deja como limitación conocida.
 
+## 0.3.1
+- Subcomando `/flow map` para imprimir la tabla de 10 fases sin alterar el estado.
+- Evita que cerrar un gate anterior (`/flow gate <anterior>`) retroceda la fase actual (`Math.max`).
+- Recorte de secciones no aplicables del bloque común en fases tempranas (`MEASURED_MAX_BYTES` baja de `6406` a `5891` bytes).
+- Deduplicación de inyecciones por cierre de gate en un mismo turno mediante `WeakSet`.
+- Desacoplamiento de skills empaquetadas (`to-spec`, `to-tickets`, `implement-spec`, `code-review`) con rutas `.scratch/<feature>/` y paso explícito de fixed point (`BASE_SHA`).
+
 ## 0.2.0
 
 - Estado por sesión con resolución de dueño para subagentes (A3): lectura sube por `parentID`, escritura al
