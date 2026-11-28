@@ -1,7 +1,8 @@
-import { existsSync, readFileSync, unlinkSync, unwatchFile, watchFile } from "node:fs"
+import { existsSync, readdirSync, readFileSync, unlinkSync, watch } from "node:fs"
+import { tmpdir } from "node:os"
+import { Plugin } from "@opencode/plugin/tui"
 
 import {
-  feedbackFilePath,
   onFeedback,
   type FeedbackPayload,
   type FeedbackVariant,
@@ -33,7 +34,12 @@ type KeymapCommandLike = {
 export type TuiPluginContext = {
   readonly client?: {
     readonly session?: {
-      readonly command?: (input: { sessionID: string; command: string }) => Promise<unknown>
+      readonly create?: (input?: Record<string, unknown>) => Promise<{ readonly id?: string; readonly data?: { readonly id?: string } }>
+      readonly command?: (input: {
+        readonly sessionID: string
+        readonly name: string
+        readonly text: string
+      }) => Promise<unknown>
     }
   }
   readonly data?: {
@@ -53,6 +59,7 @@ export type TuiPluginContext = {
       readonly alert?: (options: { readonly title: string; readonly message: string }) => Promise<void>
     }
     readonly router?: {
+      readonly navigate?: (destination: { readonly type: "session"; readonly sessionID: string }) => void
       readonly current?: () => { readonly type?: string; readonly sessionID?: string }
     }
   }
@@ -169,20 +176,33 @@ export function setupTui(ctx: TuiPluginContext): () => void {
   const seen = new Set<string>()
   const cleanups: Array<() => void> = []
 
-  const activeSessionID = (): string | undefined => {
+  const ensureSessionID = async (): Promise<string | undefined> => {
     const route = ctx.ui?.router?.current?.()
     if (route?.type === "session" && typeof route.sessionID === "string") return route.sessionID
     const list = ctx.data?.session?.list?.()
-    return list && list.length > 0 ? list[0]?.id : undefined
+    if (list && list.length > 0 && typeof list[0]?.id === "string") return list[0].id
+    if (typeof ctx.client?.session?.create === "function") {
+      const created = await ctx.client.session.create({})
+      const id = created?.id ?? created?.data?.id
+      if (typeof id === "string" && id.length > 0) {
+        ctx.ui?.router?.navigate?.({ type: "session", sessionID: id })
+        return id
+      }
+    }
+    return undefined
   }
 
-  const dispatchSlash = async (raw?: string): Promise<void> => {
-    const sessionID = activeSessionID()
-    const command = (raw ?? "").trim()
-    const full = command.startsWith("/") ? command : command ? `/flow ${command}` : "/flow help"
-    if (sessionID && typeof ctx.client?.session?.command === "function") {
-      await ctx.client.session.command({ sessionID, command: full })
-    }
+  const dispatchFlow = async (raw?: string): Promise<void> => {
+    const sessionID = await ensureSessionID()
+    if (!sessionID || typeof ctx.client?.session?.command !== "function") return
+    const trimmed = (raw ?? "").trim()
+    const withoutSlash = trimmed.replace(/^\/(?:flow|workflow)\s*/i, "")
+    const text = withoutSlash.length > 0 ? withoutSlash : "help"
+    await ctx.client.session.command({
+      sessionID,
+      name: "flow",
+      text,
+    })
   }
 
   if (typeof ctx.keymap?.layer === "function") {
@@ -196,7 +216,7 @@ export function setupTui(ctx: TuiPluginContext): () => void {
           palette: true,
           suggested: true,
           slash: { name: "flow", aliases: ["workflow"], arguments: true },
-          run: (input?: string) => dispatchSlash(input),
+          run: (input?: string) => dispatchFlow(input),
         },
         ...FLOW_SUBCOMMANDS.map((item) => ({
           id: item.id,
@@ -204,16 +224,11 @@ export function setupTui(ctx: TuiPluginContext): () => void {
           description: item.description,
           group: "opencode-flow",
           palette: true as const,
-          run: () => dispatchSlash(item.promptTemplate),
+          run: () => dispatchFlow(item.promptTemplate),
         })),
       ],
     }))
   }
-
-  const offBus = onFeedback((_sessionID, payload) => {
-    deliver(payload)
-  })
-  cleanups.push(offBus)
 
   const deliver = (payload: FeedbackPayload): void => {
     if (seen.has(payload.id)) return
@@ -225,40 +240,59 @@ export function setupTui(ctx: TuiPluginContext): () => void {
     renderFeedback(ctx.ui, payload)
   }
 
-  let watchedFile: string | undefined
-  const syncWatch = (): void => {
-    const sid = activeSessionID()
-    if (!sid) return
-    const file = feedbackFilePath(sid)
-    if (file === watchedFile) return
-    if (watchedFile) unwatchFile(watchedFile)
-    watchedFile = file
-    const readLatest = (): void => {
+  const offBus = onFeedback((_sessionID, payload) => {
+    deliver(payload)
+  })
+  cleanups.push(offBus)
+
+  const tmpDir = tmpdir()
+  const prefix = "opencode-flow-fb-"
+
+  const consumeFile = (file: string): void => {
+    try {
+      if (!existsSync(file)) return
+      const parsed = JSON.parse(readFileSync(file, "utf8")) as { payload?: unknown }
+      if (!isFeedbackPayload(parsed.payload)) return
       try {
-        if (!existsSync(file)) return
-        const parsed = JSON.parse(readFileSync(file, "utf8")) as { payload?: unknown }
-        try {
-          unlinkSync(file)
-        } catch {
-          // Ignorar si ya fue eliminado.
-        }
-        if (!isFeedbackPayload(parsed.payload)) return
-        const createdAt = Number(parsed.payload.id.split("-")[0])
-        if (Number.isFinite(createdAt) && createdAt < bootedAt) return
-        deliver(parsed.payload)
+        unlinkSync(file)
       } catch {
-        // Ignorar lecturas parciales.
+        // Ignorar si otra instancia ya lo consumió.
       }
+      const createdAt = Number(parsed.payload.id.split("-")[0])
+      if (Number.isFinite(createdAt) && createdAt < bootedAt) return
+      deliver(parsed.payload)
+    } catch {
+      // Ignorar lecturas parciales mientras el servidor escribe el archivo.
     }
-    readLatest()
-    watchFile(file, { interval: 150 }, readLatest)
   }
 
-  syncWatch()
-  const pollTimer = setInterval(syncWatch, 500)
+  const scanTmpDir = (): void => {
+    try {
+      for (const name of readdirSync(tmpDir)) {
+        if (name.startsWith(prefix) && name.endsWith(".json")) {
+          consumeFile(`${tmpDir}/${name}`)
+        }
+      }
+    } catch {
+      // Ignorar errores transitorios de lectura de directorio.
+    }
+  }
+
+  scanTmpDir()
+  let fsWatcher: ReturnType<typeof watch> | undefined
+  try {
+    fsWatcher = watch(tmpDir, (_eventType, filename) => {
+      if (typeof filename === "string" && filename.startsWith(prefix) && filename.endsWith(".json")) {
+        consumeFile(`${tmpDir}/${filename}`)
+      }
+    })
+  } catch {
+    // Fallback al polling periódico si fs.watch no está disponible.
+  }
+  const pollTimer = setInterval(scanTmpDir, 250)
   cleanups.push(() => {
     clearInterval(pollTimer)
-    if (watchedFile) unwatchFile(watchedFile)
+    fsWatcher?.close()
   })
 
   return () => {
@@ -266,7 +300,7 @@ export function setupTui(ctx: TuiPluginContext): () => void {
   }
 }
 
-export default {
+export default Plugin.define({
   id: "opencode-flow",
-  setup: setupTui,
-}
+  setup: (ctx) => setupTui(ctx as unknown as TuiPluginContext),
+})
