@@ -33,7 +33,7 @@ import { makeLogger, OnceLog } from "./log.ts"
 import { decide, WRITING_TOOLS } from "./gate-decision.ts"
 import { renderFor, scopeToFeature } from "./contract.ts"
 import { provisionalSlug } from "./slug.ts"
-import { reply, syncStateEntry, offMessage } from "./visibility.ts"
+import { reply, syncStateEntry, offMessage, publishFeedback, type FeedbackDisplay, type FeedbackVariant } from "./visibility.ts"
 import { deducePhaseInfo, readFeatureMarker, writeFeatureMarker } from "./feature.ts"
 
 const LOG_PREFIX = "[opencode-flow]"
@@ -447,22 +447,50 @@ export default Plugin.define({
           return state
         }
 
+        const notify = async (
+          kind: string,
+          title: string,
+          message: string,
+          options: { variant?: FeedbackVariant; display?: FeedbackDisplay } = {},
+        ): Promise<void> => {
+          await publishFeedback(ctx.session as never, input.sessionID, {
+            kind,
+            title,
+            message,
+            variant: options.variant ?? "info",
+            display: options.display ?? "toast",
+          })
+        }
+
         switch (parsed.kind) {
           case "help": {
             // P3: rama SIN efectos. No escribe estado, no toca `entry.put/remove`: se lee el
             // estado (ya resuelto arriba) y se contesta. Un `/flow stauts` no puede alterar nada.
             const reason = parsed.reason ? `${parsed.reason}\n\n` : ""
-            await reply(ctx.session as never, input.sessionID, `${reason}${help({ active: previous?.active === true })}`)
+            const body = `${reason}${help({ active: previous?.active === true })}`
+            await notify("help", "opencode-flow · Ayuda y subcomandos", body, {
+              variant: parsed.reason ? "warning" : "info",
+              display: "dialog",
+            })
+            await reply(ctx.session as never, input.sessionID, body)
             return
           }
           case "map": {
             // Rama SIN efectos: imprime el mapa de las 10 fases.
-            await reply(ctx.session as never, input.sessionID, phaseMap())
+            const table = phaseMap()
+            await notify("map", "opencode-flow · Mapa de 10 fases", table, {
+              variant: "info",
+              display: "dialog",
+            })
+            await reply(ctx.session as never, input.sessionID, table)
             return
           }
-          case "bad-gate":
-            await reply(ctx.session as never, input.sessionID, badGateMessage(parsed.name))
+          case "bad-gate": {
+            const msg = badGateMessage(parsed.name)
+            await notify("bad-gate", "opencode-flow · Gate inválido", msg, { variant: "warning" })
+            await reply(ctx.session as never, input.sessionID, msg)
             return
+          }
           case "off": {
             // No usa `commit`: apagar significa BORRAR el entry, no escribir otro.
             await writeState(
@@ -479,29 +507,31 @@ export default Plugin.define({
             // Punto (b): el entry desaparece al apagar. Si el runtime no expone la API,
             // seguimos: el silencio del flow ya es la señal.
             await syncStateEntry(ctx.session as never, input.sessionID, undefined)
+            const msg = offMessage(previous)
+            await notify("off", "opencode-flow · Desactivado", msg, { variant: "info" })
             await reply(
               ctx.session as never,
               input.sessionID,
-              offMessage(previous),
+              msg,
             )
             return
           }
           case "status": {
             if (!previous || !previous.active) {
-              await reply(ctx.session as never, input.sessionID, reminder())
+              const msg = reminder()
+              await notify("status", "opencode-flow · Inactivo", msg, { variant: "info" })
+              await reply(ctx.session as never, input.sessionID, msg)
               return
             }
             const requirement = gateRequirement(previous.fase, previous.feature, projectRoot, previous.ticketsOpted)
-            await reply(
-              ctx.session as never,
-              input.sessionID,
-              [
-                contextSummary(previous),
-                requirement ?? "gate: declarativo",
-                ...(previous.topic ? [`tema: ${previous.topic}`] : []),
-                ...(lastGateError ? [`AVISO: ${lastGateError}`] : []),
-              ].join(" · "),
-            )
+            const summary = [
+              contextSummary(previous),
+              requirement ?? "gate: declarativo",
+              ...(previous.topic ? [`tema: ${previous.topic}`] : []),
+              ...(lastGateError ? [`AVISO: ${lastGateError}`] : []),
+            ].join(" · ")
+            await notify("status", `opencode-flow · Fase ${previous.fase}`, summary, { variant: "info" })
+            await reply(ctx.session as never, input.sessionID, summary)
             return
           }
           case "gate": {
@@ -526,6 +556,12 @@ export default Plugin.define({
               ...inheritedAllow,
               active: true,
             })
+            await notify(
+              "gate",
+              `opencode-flow · Gate "${parsed.gate}" aprobado → Fase ${next}`,
+              `Feature: ${previous?.feature ?? "sin nombre"} · Gate pendiente: ${gate ?? "ninguno"}`,
+              { variant: "success" },
+            )
             await reply(ctx.session as never, input.sessionID, phaseBrief(next, previous?.feature), { resume: true })
             return
           }
@@ -560,6 +596,12 @@ export default Plugin.define({
             // Punto (e): el marcador en la raíz deja huella en disco para retomar sin storage.
             writeFeatureMarker(projectRoot, feature)
             const offer = marker ? `[flow] he encontrado .flow-feature: retomo "${marker.slug}" (creado ${marker.createdAt}).\n` : ""
+            await notify(
+              "start",
+              `opencode-flow · Fase ${parsed.fase} (${entry?.name ?? "inicio"})`,
+              `Feature: ${feature} · Gate: ${gate ?? "declarativo"}`,
+              { variant: "success" },
+            )
             await reply(
               ctx.session as never,
               input.sessionID,
@@ -595,6 +637,12 @@ export default Plugin.define({
               ...inheritedAllow,
               active: true,
             })
+            await notify(
+              "next",
+              next === previous.fase ? `opencode-flow · Ya en fase ${LAST_PHASE}` : `opencode-flow · Avanzó a Fase ${next}`,
+              `Feature: ${previous.feature ?? "sin nombre"} · Gate: ${entry?.gate ?? "ninguno"}`,
+              { variant: next === previous.fase ? "warning" : "success" },
+            )
             await reply(
               ctx.session as never,
               input.sessionID,
@@ -623,6 +671,12 @@ export default Plugin.define({
               allow,
               active: true,
             })
+            await notify(
+              "back",
+              `opencode-flow · Retrocedió a Fase ${target}`,
+              `Feature: ${previous.feature ?? "sin nombre"} · Gate reabierto: ${entry?.gate ?? "ninguno"}`,
+              { variant: "warning" },
+            )
             await reply(
               ctx.session as never,
               input.sessionID,
@@ -667,13 +721,14 @@ export default Plugin.define({
               ...inheritedAllow,
               active: true,
             })
-            await reply(
-              ctx.session as never,
-              input.sessionID,
+            const renameMsg =
               `[flow] feature renombrada: ${oldFeature ?? "(ninguna)"} → ${newFeature}` +
-                (moved ? ` · movido .scratch/${oldFeature}/` : "") +
-                (conflict ? ` · AVISO: .scratch/${newFeature}/ ya existía, no he movido nada` : ""),
-            )
+              (moved ? ` · movido .scratch/${oldFeature}/` : "") +
+              (conflict ? ` · AVISO: .scratch/${newFeature}/ ya existía, no he movido nada` : "")
+            await notify("rename", "opencode-flow · Feature renombrada", renameMsg, {
+              variant: conflict ? "warning" : "success",
+            })
+            await reply(ctx.session as never, input.sessionID, renameMsg)
             return
           }
           case "resume": {
@@ -723,6 +778,12 @@ export default Plugin.define({
               active: true,
             })
             writeFeatureMarker(projectRoot, feature)
+            await notify(
+              "resume",
+              `opencode-flow · Retomado en Fase ${fase}`,
+              `Feature: ${feature} · ${why}`,
+              { variant: "success" },
+            )
             await reply(
               ctx.session as never,
               input.sessionID,
@@ -740,8 +801,16 @@ export default Plugin.define({
 
       registrations.push(
         await ctx.command.transform((editor) => {
-          editor.add({ name: "flow", description: "Activa el mapa de fases y su gate por artefacto", execute })
-          editor.add({ name: "workflow", description: "Alias de /flow", execute })
+          editor.add({
+            name: "flow",
+            description: "Pipeline de 10 fases con gates · Subcomandos: start | status | map | gate | next | back | rename | resume | off | help",
+            execute,
+          })
+          editor.add({
+            name: "workflow",
+            description: "Alias de /flow (start | status | map | gate | next | back | rename | resume | off | help)",
+            execute,
+          })
         }),
       )
     }

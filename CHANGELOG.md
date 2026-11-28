@@ -129,6 +129,11 @@ tickets (A2 + A10 + Gate B + C1/C2/C7). Etiqueta pendiente de la prueba manual e
   contra sus tipos); si un runtime futuro los disparara ambos, habría texto repetido, nunca estado corrupto.
   No hay marcador de deduplicación; se deja como limitación conocida.
 
+## 0.3.3
+- Añade entrypoint TUI (`./tui` -> `src/tui.ts`) con feedback visual inmediato desde el primer comando (`toast` para confirmaciones y `status`/`off`/`rename`, y `dialog` legible para `/flow map` y `/flow help` con 0 tokens).
+- Registra en la paleta y autocompletado TUI todos los subcomandos de `/flow` (`start`, `status`, `map`, `gate`, `next`, `back`, `rename`, `resume`, `off`, `help`) con título y descripción.
+- Mantiene `resume: true` únicamente en comandos de arranque/transición (`start`, `resume`, `gate`, `next`, `back`) y `0 tokens` (`resume: false`) en `status`, `map`, `help`, `off` y `rename`.
+
 ## 0.3.2
 - Arranque y avance en un solo turno (`resume: true`) para `/flow <slug>`, `/flow start`, `/flow resume`, `/flow gate`, `/flow next` y `/flow back`, evitando que la TUI quede esperando un segundo mensaje del usuario.
 - Mantiene `resume: false` (0 tokens) para consultas y paradas (`/flow status`, `/flow map`, `/flow help`, `/flow off`, `/flow rename`).

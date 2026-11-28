@@ -20,6 +20,19 @@ import { narration, stateLine } from "./phases.ts"
 /** Key estable del entry: si otro plugin usa otra key, no colisionamos. */
 export const STATE_ENTRY_KEY = "opencode-flow.state"
 
+export type FeedbackVariant = "info" | "success" | "warning" | "error"
+export type FeedbackDisplay = "toast" | "dialog"
+
+export type FeedbackPayload = {
+  readonly id: string
+  readonly kind: string
+  readonly title: string
+  readonly message: string
+  readonly variant: FeedbackVariant
+  readonly display: FeedbackDisplay
+}
+
+
 export type InstructionsEntry = {
   readonly instructions?: {
     readonly entry?: {
@@ -134,4 +147,54 @@ export function offMessage(state: FlowState | undefined): string {
     ? `/flow resume ${state.feature}`
     : "/flow resume"
   return `${narration(fase, "flow desactivado")}\nFlow desactivado para esta sesión. Reactiva con ${hint}.`
+}
+
+export type FeedbackListener = (sessionID: string, payload: FeedbackPayload) => void
+
+const feedbackListeners = new Set<FeedbackListener>()
+
+export function feedbackFilePath(sessionID: string): string {
+  const safe = sessionID.replace(/[^a-zA-Z0-9._-]/g, "_") || "default"
+  return `${process.env.TMPDIR ?? "/tmp"}/opencode-flow-fb-${safe}.json`
+}
+
+/** Suscribe un consumidor TUI al canal efímero de feedback visual (memoria + archivo IPC en tmpdir). */
+export function onFeedback(listener: FeedbackListener): () => void {
+  feedbackListeners.add(listener)
+  return () => {
+    feedbackListeners.delete(listener)
+  }
+}
+
+/**
+ * Emite un aviso visual inmediato para que la TUI lo pinte en pantalla (toast o dialog)
+ * desde el primer comando, incluso cuando `resume: false` (0 tokens).
+ * No escribe en `storage` ni en `instructions.entry` (respeta la invariante P3 sin efectos).
+ */
+export async function publishFeedback(
+  _session: VisibilitySession | undefined,
+  sessionID: string,
+  payload: Omit<FeedbackPayload, "id">,
+): Promise<boolean> {
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const full: FeedbackPayload = { id, ...payload }
+  let delivered = false
+  for (const listener of feedbackListeners) {
+    try {
+      listener(sessionID, full)
+      delivered = true
+    } catch {
+      // Un fallo visual nunca rompe la ejecución del comando.
+    }
+  }
+  if (!process.env.NODE_TEST_CONTEXT) {
+    try {
+      const { writeFileSync } = await import("node:fs")
+      writeFileSync(feedbackFilePath(sessionID), JSON.stringify({ sessionID, payload: full }), "utf8")
+      delivered = true
+    } catch {
+      // Degradación silenciosa si tmpdir no es escribible.
+    }
+  }
+  return delivered
 }
