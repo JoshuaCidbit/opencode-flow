@@ -141,15 +141,17 @@ function editDistance(a: string, b: string, max: number): number {
 }
 
 /** Subcomando más parecido, si está a distancia <= 2. `undefined` si no hay ninguno cercano:
--  sugerir cualquier cosa convierte la ayuda en ruido. */
+-  sugerir cualquier cosa convierte la ayuda en ruido. Con 2 letras exigimos distancia 1
+-  (`"of"` → `"off"` sí, `"mi"` → `"map"` no: cambiarían 2 de 3 letras); con 1 letra, nada. */
 export function suggestSubcommand(raw: string): string | undefined {
   const target = foldCommand(raw)
-  if (!target) return undefined
+  if (target.length < 2) return undefined
+  const max = target.length >= 3 ? 2 : 1
   let best: string | undefined
   let bestDistance = Number.POSITIVE_INFINITY
   for (const candidate of SUBCOMMANDS) {
-    const distance = editDistance(target, foldCommand(candidate), 2)
-    if (distance <= 2 && distance < bestDistance) {
+    const distance = editDistance(target, foldCommand(candidate), max)
+    if (distance <= max && distance < bestDistance) {
       best = candidate
       bestDistance = distance
     }
@@ -205,14 +207,22 @@ export function parseCommand(text: string, options: { active?: boolean } = {}): 
   }
 
   if (sub === "start") {
-    // `/flow start`, `/flow start N`, `/flow start N <slug>`
+    // `/flow start`, `/flow start N`, `/flow start N <slug>`, `/flow start <descripción>`
     if (rest.length === 0) return { kind: "start", fase: FIRST_PHASE }
-    const n = toPhase(rest[0])
-    if (n === undefined) return { kind: "help", reason: `"${rest[0]}" no es una fase entre ${FIRST_PHASE} y ${LAST_PHASE}` }
-    const slug = rest[1]
-    if (slug === undefined) return { kind: "start", fase: n }
-    if (!isValidSlug(slug)) return { kind: "help", reason: `slug "${slug}" inválido: usa minúsculas, dígitos y guiones (1-${MAX_SLUG}), sin . / \\` }
-    return { kind: "start", fase: n, feature: slug }
+    if (/^\d+$/.test(rest[0])) {
+      const n = toPhase(rest[0])
+      if (n === undefined) return { kind: "help", reason: `"${rest[0]}" no es una fase entre ${FIRST_PHASE} y ${LAST_PHASE}` }
+      const slug = rest[1]
+      if (slug === undefined) return { kind: "start", fase: n }
+      if (!isValidSlug(slug)) return { kind: "help", reason: `slug "${slug}" inválido: usa minúsculas, dígitos y guiones (1-${MAX_SLUG}), sin . / \\` }
+      return { kind: "start", fase: n, feature: slug }
+    }
+    const rawDesc = rest.join(" ")
+    const feature = slugify(rawDesc)
+    if (!feature) {
+      return { kind: "help", reason: `no pude derivar un slug de "${rawDesc}"` }
+    }
+    return { kind: "start", fase: FIRST_PHASE, feature, topic: topicFrom(rawDesc) }
   }
 
   if (sub === "next") return { kind: "next" }
@@ -251,14 +261,16 @@ export function parseCommand(text: string, options: { active?: boolean } = {}): 
       suggestion: suggestSubcommand(head),
     }
   }
-  // Con el flow inactivo, una sola palabra desconocida tampoco es descripción (es casi
-  // siempre un subcomando mal tecleado). Hacen falta dos palabras para describir.
-  if (parts.length < 2) {
-    return { kind: "help", reason: helpReason(head), suggestion: suggestSubcommand(head) }
+  // Con el flow inactivo, solo una ÚNICA palabra parecida a un subcomando conocido es typo.
+  // Con 2+ palabras (`mi feature`, `Auditar Orca Router`) o 1 palabra sin parecido
+  // (`auditar_orcarouter`) es descripción: arranca en fase 1.
+  const suggestion = suggestSubcommand(head)
+  if (parts.length === 1 && suggestion) {
+    return { kind: "help", reason: helpReason(head), suggestion }
   }
   const feature = slugify(text)
   if (!feature) {
-    return { kind: "help", reason: `no pude derivar un slug de "${text}"`, suggestion: suggestSubcommand(head) }
+    return { kind: "help", reason: `no pude derivar un slug de "${text}"` }
   }
   return { kind: "start", fase: FIRST_PHASE, feature, topic: topicFrom(text) }
 }

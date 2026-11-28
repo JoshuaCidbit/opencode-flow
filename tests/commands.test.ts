@@ -114,9 +114,33 @@ test("P3: sin nada parecido no se sugiere (la ayuda no es ruido)", () => {
   assert.equal(parsed.kind === "help" && parsed.suggestion, undefined, "no debe sugerir cualquier cosa")
 })
 
-test("P3: con flow INACTIVO, una sola palabra desconocida da ayuda", () => {
+test("P3: con flow INACTIVO, un typo de subcomando da ayuda con sugerencia", () => {
   const parsed = parseCommand("stauts")
-  assert.equal(parsed.kind, "help", "una palabra suelta no es descripción")
+  assert.equal(parsed.kind, "help", "un typo de subcomando debe dar ayuda")
+  assert.equal(parsed.kind === "help" && parsed.suggestion, "status")
+})
+
+test("C1: con flow INACTIVO, un slug o descripción de 1+ palabras arranca en fase 1", () => {
+  const oneWord = parseCommand("auditar_orcarouter")
+  assert.equal(oneWord.kind, "start")
+  assert.equal(oneWord.kind === "start" && oneWord.feature, "auditar-orcarouter")
+  assert.equal(oneWord.kind === "start" && oneWord.topic, "auditar_orcarouter")
+
+  const title = parseCommand("Auditar Orca Router")
+  assert.equal(title.kind, "start")
+  assert.equal(title.kind === "start" && title.feature, "auditar-orca-router")
+  assert.equal(title.kind === "start" && title.topic, "Auditar Orca Router")
+
+  const viaStart = parseCommand("start Auditar Orca Router", { active: true })
+  assert.equal(viaStart.kind, "start")
+  assert.equal(viaStart.kind === "start" && viaStart.feature, "auditar-orca-router")
+  assert.equal(viaStart.kind === "start" && viaStart.topic, "Auditar Orca Router")
+
+  // Blindaje: "mi" está a distancia 2 de "map", pero con 2+ palabras es descripción.
+  const shortDescription = parseCommand("mi feature")
+  assert.equal(shortDescription.kind, "start")
+  assert.equal(shortDescription.kind === "start" && shortDescription.feature, "mi-feature")
+  assert.equal(shortDescription.kind === "start" && shortDescription.topic, "mi feature")
 })
 
 test("P3: con flow INACTIVO, una descripción de 2+ palabras sigue arrancando", () => {

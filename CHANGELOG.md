@@ -129,6 +129,9 @@ tickets (A2 + A10 + Gate B + C1/C2/C7). Etiqueta pendiente de la prueba manual e
   contra sus tipos); si un runtime futuro los disparara ambos, habría texto repetido, nunca estado corrupto.
   No hay marcador de deduplicación; se deja como limitación conocida.
 
+## 0.3.5
+- Soporte para `/flow <descripción|slug>` de 1+ palabras y `/flow start <descripción>` sin falsos positivos de typo.
+
 ## 0.3.4
 - Registra el entrypoint TUI con `define()` oficial de `@opencode/plugin/tui` para que OpenCode cargue `role=tui` junto al servidor.
 - Vigila el canal IPC efímero en `tmpdir()` de forma independiente al `sessionID` previo, permitiendo feedback visual inmediato (toast/dialog) desde el primer comando incluso en la pantalla *New session*.
